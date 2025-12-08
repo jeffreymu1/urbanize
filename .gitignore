@@ -1,0 +1,7 @@
+.env
+data/PP2/final_photo_dataset/
+data/preprocessed_images/
+data/PP2/
+*.jpg
+.DS_Store
+.ipynb_checkpoints/
