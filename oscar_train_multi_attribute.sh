@@ -1,20 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=cond_gan_wealthy
+#SBATCH --job-name=multi_attr_gan
 #SBATCH --time=12:00:00
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
-#SBATCH --output=logs/train-%j.out
-#SBATCH --error=logs/train-%j.err
+#SBATCH --output=logs/multi_attr-%j.out
+#SBATCH --error=logs/multi_attr-%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=YOUR_EMAIL@brown.edu
 
-# OSCAR Full Training Script Using TensorFlow Container
-# This uses the same container setup that worked in the 1-epoch test
+# OSCAR Training Script for Multi-Attribute GAN Using TensorFlow Container
 
 echo "=========================================="
-echo "OSCAR Conditional GAN Training - Wealthy Attribute"
+echo "OSCAR Multi-Attribute GAN Training"
 echo "=========================================="
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
@@ -70,23 +69,25 @@ echo ""
 
 # Create output directory with timestamp
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUT_DIR="results/conditional_wealthy_${TIMESTAMP}"
+OUT_DIR="results/multi_attribute_gan_${TIMESTAMP}"
 mkdir -p logs
 mkdir -p "${OUT_DIR}"
 
 echo "Configuration:"
-echo "  Attribute: wealthy_score"
-echo "  Training images: 89,013"
-echo "  Validation images: 9,901"
+echo "  Attributes: wealthy, depressing, safety, lively, boring, beautiful (6 total)"
+echo "  Training images: ~89,000"
+echo "  Validation images: ~9,900"
 echo "  Epochs: 100"
 echo "  Batch size: 128"
+echo "  Latent dim: 256 (increased for better diversity)"
 echo "  Image size: 64x64"
+echo "  Input dimension: 256 (latent) + 6 (attributes) = 262"
 echo "  Output directory: ${OUT_DIR}"
 echo ""
 
 # Run training
-echo "Starting full training (100 epochs)..."
-echo "Expected duration: ~2-3 hours (based on 1-epoch test: 75.7s/epoch)"
+echo "Starting multi-attribute training (100 epochs)..."
+echo "Expected duration: ~2-3 hours (similar to single-attribute)"
 echo "=========================================="
 echo ""
 
@@ -120,11 +121,11 @@ echo ""
 ) &
 MONITOR_PID=$!
 
-$EXEC $CONTAINER_PATH python -u src/train_conditional_gan.py \
-  --train_csv data/wealthy_scores_train.csv \
-  --val_csv data/wealthy_scores_val.csv \
+$EXEC $CONTAINER_PATH python -u src/train_multi_attribute_gan.py \
+  --train_csv data/all_attribute_scores_train.csv \
+  --val_csv data/all_attribute_scores_val.csv \
   --image_dir data/preprocessed_images \
-  --attribute_name wealthy_score \
+  --attribute_names wealthy depressing safety lively boring beautiful \
   --epochs 100 \
   --batch_size 128 \
   --latent_dim 256 \
@@ -144,13 +145,13 @@ kill $MONITOR_PID 2>/dev/null || true
 echo ""
 echo "=========================================="
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "✅ TRAINING COMPLETED SUCCESSFULLY!"
+    echo "✅ MULTI-ATTRIBUTE TRAINING COMPLETED SUCCESSFULLY!"
     echo ""
     echo "Results saved to: ${OUT_DIR}"
     echo ""
     echo "Files generated:"
     echo "  - checkpoints/ckpt-* (model weights)"
-    echo "  - preview_epoch_*.png (generated image samples)"
+    echo "  - preview_epoch_*.png (generated image samples showing attribute variations)"
     echo "  - metrics.csv (loss history)"
     echo "  - training_log_${TIMESTAMP}.txt (full logs)"
     echo ""
@@ -159,14 +160,14 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo "   scp -r $USER@ssh.ccv.brown.edu:~/urbanize/${OUT_DIR} ."
     echo ""
     echo "2. Generate images with your trained model:"
-    echo "   python src/generate_conditional.py --checkpoint_dir ${OUT_DIR}/checkpoints/"
+    echo "   python src/generate_multi_attribute.py --checkpoint_dir ${OUT_DIR}/checkpoints/"
     echo ""
-    echo "3. Launch interactive demo:"
-    echo "   python src/interactive_demo.py --checkpoint_dir ${OUT_DIR}/checkpoints/"
+    echo "3. Launch interactive demo with 5 sliders:"
+    echo "   python src/interactive_multi_attribute_demo.py --checkpoint_dir ${OUT_DIR}/checkpoints/"
 else
     echo "❌ TRAINING FAILED"
     echo "Exit code: ${EXIT_CODE}"
-    echo "Check logs/train-${SLURM_JOB_ID}.err for error details"
+    echo "Check logs/multi_attr-${SLURM_JOB_ID}.err for error details"
     echo "Check ${OUT_DIR}/training_log_${TIMESTAMP}.txt for full output"
 fi
 echo "End time: $(date)"

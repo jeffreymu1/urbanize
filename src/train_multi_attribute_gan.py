@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 """
-Conditional DCGAN for Attribute-Controllable Image Generation
+Multi-Attribute Conditional DCGAN for Controllable Image Generation
 
-This model generates images conditioned on attribute scores (e.g., "wealthy" = 0.7).
+This model generates images conditioned on MULTIPLE attribute scores simultaneously.
 
 Architecture:
-- Generator: Takes [latent_noise (128-d), attribute_score (1-d)] → 64x64x3 image
-- Discriminator: Takes [64x64x3 image, attribute_score (1-d)] → real/fake prediction
+- Generator: Takes [latent_noise (128-d), attributes (5-d)] → 64x64x3 image
+- Discriminator: Takes [64x64x3 image, attributes (5-d)] → real/fake prediction
+
+Attributes: wealthy, depressing, safety, lively, boring
 
 Usage:
-    python train_conditional_gan.py \\
-        --attribute_csv data/wealthy_scores_train.csv \\
-        --val_csv data/wealthy_scores_val.csv \\
-        --attribute_name wealthy_score \\
+    python train_multi_attribute_gan.py \\
+        --train_csv data/all_attribute_scores_train.csv \\
+        --val_csv data/all_attribute_scores_val.csv \\
+        --attribute_names wealthy depressing safety lively boring \\
         --epochs 100 \\
         --batch_size 128
 """
 
-import os
 import time
 import csv
 from pathlib import Path
@@ -31,59 +32,73 @@ from datetime import datetime
 
 # ==================== DATA LOADING ====================
 
-def load_image_with_score(image_path, score, image_size):
-    """Load and preprocess image, return with its attribute score."""
+def load_image_with_attributes(image_path, attributes, image_size):
+    """Load and preprocess image, return with its attribute scores."""
     img_bytes = tf.io.read_file(image_path)
     img = tf.io.decode_image(img_bytes, channels=3, expand_animations=False)
     img.set_shape([None, None, 3])
     img = tf.image.convert_image_dtype(img, tf.float32)
     img = tf.image.resize(img, [image_size, image_size], antialias=True)
     img = img * 2.0 - 1.0  # Normalize to [-1, 1]
-    return img, score
+    return img, attributes
 
 
-def make_conditional_dataset(scores_csv, image_dir, attribute_name, image_size, batch_size, shuffle=True):
+def make_multi_attribute_dataset(scores_csv, image_dir, attribute_names, image_size, batch_size, shuffle=True):
     """
-    Create dataset that yields (image, attribute_score) pairs.
+    Create dataset that yields (image, attributes) pairs.
 
     Args:
-        scores_csv: Path to CSV with columns [image_id, {attribute_name}]
+        scores_csv: Path to CSV with columns [image_id, attr1, attr2, ...]
         image_dir: Directory containing {image_id}.jpg files
-        attribute_name: Name of attribute column (e.g., 'wealthy_score')
+        attribute_names: List of attribute column names (e.g., ['wealthy', 'depressing', ...])
         image_size: Image size (64)
         batch_size: Batch size
         shuffle: Whether to shuffle
 
     Returns:
-        tf.data.Dataset yielding (images, scores) where:
+        tf.data.Dataset yielding (images, attributes) where:
             images: [B, H, W, 3] in [-1, 1]
-            scores: [B, 1] in [0, 1]
+            attributes: [B, num_attributes] in [0, 1]
     """
     # Load scores CSV
     df = pd.read_csv(scores_csv)
 
-    # Build paths and scores
+    print(f"  Loaded CSV with {len(df):,} rows")
+    print(f"  Columns: {list(df.columns)}")
+    print(f"  Requested attributes: {attribute_names}")
+
+    # Check for missing values
+    missing_before = df[attribute_names].isnull().sum().sum()
+    if missing_before > 0:
+        print(f"  ⚠️  Found {missing_before:,} missing values")
+        print(f"  Dropping rows with missing attributes...")
+        df = df.dropna(subset=attribute_names)
+        print(f"  Remaining rows: {len(df):,}")
+
+    # Build paths and attribute vectors
     image_paths = []
-    scores = []
+    attribute_vectors = []
 
     for _, row in df.iterrows():
         img_path = Path(image_dir) / f"{row['image_id']}.jpg"
         if img_path.exists():
             image_paths.append(str(img_path))
-            scores.append(float(row[attribute_name]))
+            # Extract all attributes as a vector
+            attr_vec = [float(row[attr]) for attr in attribute_names]
+            attribute_vectors.append(attr_vec)
 
-    print(f"  Loaded {len(image_paths):,} images with {attribute_name}")
+    print(f"  Loaded {len(image_paths):,} images with {len(attribute_names)} attributes")
 
     # Create dataset
     path_ds = tf.data.Dataset.from_tensor_slices(image_paths)
-    score_ds = tf.data.Dataset.from_tensor_slices(scores)
-    ds = tf.data.Dataset.zip((path_ds, score_ds))
+    attr_ds = tf.data.Dataset.from_tensor_slices(attribute_vectors)
+    ds = tf.data.Dataset.zip((path_ds, attr_ds))
 
     if shuffle:
         ds = ds.shuffle(min(10000, len(image_paths)))
 
     ds = ds.map(
-        lambda path, score: load_image_with_score(path, score, image_size),
+        lambda path, attrs: load_image_with_attributes(path, attrs, image_size),
         num_parallel_calls=tf.data.AUTOTUNE
     )
     ds = ds.batch(batch_size, drop_remainder=True)  # drop_remainder for stable training
@@ -94,14 +109,14 @@ def make_conditional_dataset(scores_csv, image_dir, attribute_name, image_size, 
 
 # ==================== MODEL ARCHITECTURE ====================
 
-def make_conditional_generator(image_size, latent_dim, num_attributes=1):
+def make_multi_attribute_generator(image_size, latent_dim, num_attributes):
     """
-    Conditional Generator: [latent, attribute] → image
+    Multi-Attribute Conditional Generator: [latent, attributes] → image
 
     Args:
         image_size: Output image size (must be power of 2, >= 32)
         latent_dim: Latent noise dimension (e.g., 128)
-        num_attributes: Number of attribute inputs (1 for single attribute)
+        num_attributes: Number of attribute inputs (e.g., 5)
 
     Returns:
         Keras Model
@@ -114,10 +129,11 @@ def make_conditional_generator(image_size, latent_dim, num_attributes=1):
 
     # Inputs
     latent_input = tf.keras.layers.Input(shape=(latent_dim,), name='latent')
-    attr_input = tf.keras.layers.Input(shape=(num_attributes,), name='attribute')
+    attr_input = tf.keras.layers.Input(shape=(num_attributes,), name='attributes')
 
-    # Concatenate latent and attribute
+    # Concatenate latent and ALL attributes
     combined = tf.keras.layers.Concatenate()([latent_input, attr_input])
+    # Total dimension: latent_dim + num_attributes (e.g., 128 + 5 = 133)
 
     # Project to spatial
     x = tf.keras.layers.Dense(start_res * start_res * start_ch, use_bias=False)(combined)
@@ -136,25 +152,25 @@ def make_conditional_generator(image_size, latent_dim, num_attributes=1):
     # Final layer to RGB
     outputs = tf.keras.layers.Conv2DTranspose(3, 4, strides=2, padding='same', activation='tanh', use_bias=False)(x)
 
-    return tf.keras.Model([latent_input, attr_input], outputs, name='conditional_generator')
+    return tf.keras.Model([latent_input, attr_input], outputs, name='multi_attribute_generator')
 
 
-def make_conditional_discriminator(image_size, num_attributes=1):
+def make_multi_attribute_discriminator(image_size, num_attributes):
     """
-    Conditional Discriminator: [image, attribute] → real/fake logit
+    Multi-Attribute Conditional Discriminator: [image, attributes] → real/fake logit
 
-    Uses projection discriminator approach: attribute is projected into intermediate layers.
+    Uses projection discriminator approach: attributes are projected into intermediate layers.
 
     Args:
         image_size: Input image size
-        num_attributes: Number of attribute inputs
+        num_attributes: Number of attribute inputs (e.g., 5)
 
     Returns:
         Keras Model
     """
     # Inputs
     image_input = tf.keras.layers.Input(shape=(image_size, image_size, 3), name='image')
-    attr_input = tf.keras.layers.Input(shape=(num_attributes,), name='attribute')
+    attr_input = tf.keras.layers.Input(shape=(num_attributes,), name='attributes')
 
     # Image processing path
     x = image_input
@@ -178,7 +194,7 @@ def make_conditional_discriminator(image_size, num_attributes=1):
     x = tf.keras.layers.Flatten()(x)
     img_dim = x.shape[-1]  # Get the flattened dimension
 
-    # Project attribute to same dimension as flattened image
+    # Project attributes to same dimension as flattened image
     attr_proj = tf.keras.layers.Dense(img_dim)(attr_input)
 
     # Combine using element-wise product (projection discriminator style)
@@ -191,7 +207,7 @@ def make_conditional_discriminator(image_size, num_attributes=1):
     # Output logit (no activation - we'll use from_logits=True in loss)
     output = tf.keras.layers.Dense(1)(combined)
 
-    return tf.keras.Model([image_input, attr_input], output, name='conditional_discriminator')
+    return tf.keras.Model([image_input, attr_input], output, name='multi_attribute_discriminator')
 
 
 # ==================== LOSS FUNCTIONS ====================
@@ -213,25 +229,24 @@ def generator_loss(fake_output):
 
 @tf.function
 def train_step(generator, discriminator, g_opt, d_opt,
-               real_images, real_scores, latent_dim, batch_size):
+               real_images, real_attributes, latent_dim, batch_size):
     """Single training step."""
 
     # Sample random latent vectors
     noise = tf.random.normal([batch_size, latent_dim])
 
-    # Add small noise to attribute scores to prevent overfitting to exact values
-    # This helps reduce mode collapse and improves generalization
-    attribute_noise = tf.random.normal(tf.shape(real_scores), mean=0.0, stddev=0.05)
-    noisy_scores = tf.clip_by_value(real_scores + attribute_noise, 0.0, 1.0)
+    # Add small noise to attribute values to prevent overfitting and mode collapse
+    attribute_noise = tf.random.normal(tf.shape(real_attributes), mean=0.0, stddev=0.05)
+    noisy_attributes = tf.clip_by_value(real_attributes + attribute_noise, 0.0, 1.0)
 
     # Train discriminator
     with tf.GradientTape() as disc_tape:
-        # Generate fake images with noisy scores
-        fake_images = generator([noise, noisy_scores], training=True)
+        # Generate fake images with noisy attribute vectors
+        fake_images = generator([noise, noisy_attributes], training=True)
 
-        # Discriminator predictions (use original scores for discriminator)
-        real_output = discriminator([real_images, real_scores], training=True)
-        fake_output = discriminator([fake_images, noisy_scores], training=True)
+        # Discriminator predictions (use original attributes for discriminator)
+        real_output = discriminator([real_images, real_attributes], training=True)
+        fake_output = discriminator([fake_images, noisy_attributes], training=True)
 
         d_loss = discriminator_loss(real_output, fake_output)
 
@@ -240,12 +255,12 @@ def train_step(generator, discriminator, g_opt, d_opt,
 
     # Train generator
     noise = tf.random.normal([batch_size, latent_dim])
-    attribute_noise = tf.random.normal(tf.shape(real_scores), mean=0.0, stddev=0.05)
-    noisy_scores = tf.clip_by_value(real_scores + attribute_noise, 0.0, 1.0)
+    attribute_noise = tf.random.normal(tf.shape(real_attributes), mean=0.0, stddev=0.05)
+    noisy_attributes = tf.clip_by_value(real_attributes + attribute_noise, 0.0, 1.0)
 
     with tf.GradientTape() as gen_tape:
-        fake_images = generator([noise, noisy_scores], training=True)
-        fake_output = discriminator([fake_images, noisy_scores], training=True)
+        fake_images = generator([noise, noisy_attributes], training=True)
+        fake_output = discriminator([fake_images, noisy_attributes], training=True)
         g_loss = generator_loss(fake_output)
 
     g_gradients = gen_tape.gradient(g_loss, generator.trainable_variables)
@@ -254,34 +269,43 @@ def train_step(generator, discriminator, g_opt, d_opt,
     return g_loss, d_loss
 
 
-def generate_preview(generator, latent_dim, attribute_name, epoch, out_dir, num_cols=6):
+def generate_multi_attribute_preview(generator, latent_dim, attribute_names, epoch, out_dir, num_samples=6):
     """
-    Generate preview grid showing images at different attribute values.
+    Generate preview showing effect of varying each attribute independently.
 
-    Rows: Different random seeds
-    Cols: Different attribute values [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    Creates a grid where:
+    - Each row shows one attribute varying from 0.0 to 1.0
+    - Other attributes held constant at 0.5
     """
-    num_rows = 4
-    attribute_values = np.linspace(0.0, 1.0, num_cols)
+    num_attributes = len(attribute_names)
+    num_steps = num_samples
 
-    fig, axes = plt.subplots(num_rows, num_cols, figsize=(num_cols * 2, num_rows * 2))
+    fig, axes = plt.subplots(num_attributes, num_steps, figsize=(num_steps * 2, num_attributes * 2))
 
-    for row in range(num_rows):
-        # Same noise for this row
-        noise = tf.random.normal([1, latent_dim])
+    # Use same noise for all generations
+    noise = tf.random.normal([1, latent_dim], seed=42)
 
-        for col, attr_val in enumerate(attribute_values):
-            attr_tensor = tf.constant([[attr_val]], dtype=tf.float32)
+    for attr_idx, attr_name in enumerate(attribute_names):
+        # Vary this attribute, keep others at 0.5
+        for step_idx, attr_val in enumerate(np.linspace(0.0, 1.0, num_steps)):
+            # Create attribute vector: all 0.5 except current attribute
+            attr_vec = np.ones((1, num_attributes)) * 0.5
+            attr_vec[0, attr_idx] = attr_val
+
+            attr_tensor = tf.constant(attr_vec, dtype=tf.float32)
             img = generator([noise, attr_tensor], training=False)
             img = (img[0].numpy() + 1.0) / 2.0  # [-1,1] → [0,1]
             img = np.clip(img, 0, 1)
 
-            ax = axes[row, col]
+            ax = axes[attr_idx, step_idx] if num_attributes > 1 else axes[step_idx]
             ax.imshow(img)
             ax.axis('off')
 
-            if row == 0:
-                ax.set_title(f'{attribute_name}={attr_val:.1f}', fontsize=10)
+            # Labels
+            if step_idx == 0:
+                ax.set_ylabel(attr_name.capitalize(), fontsize=12, rotation=0, ha='right', va='center')
+            if attr_idx == 0:
+                ax.set_title(f'{attr_val:.1f}', fontsize=10)
 
     plt.tight_layout()
     out_path = Path(out_dir) / f'preview_epoch_{epoch:04d}.png'
@@ -290,7 +314,7 @@ def generate_preview(generator, latent_dim, attribute_name, epoch, out_dir, num_
     print(f"  Saved preview: {out_path.name}")
 
 
-def train_conditional_gan(
+def train_multi_attribute_gan(
     train_ds,
     val_ds,
     train_size,
@@ -303,7 +327,7 @@ def train_conditional_gan(
     batch_size,
     epochs,
     out_dir,
-    attribute_name,
+    attribute_names,
     save_every=10,
     preview_every=10
 ):
@@ -323,11 +347,17 @@ def train_conditional_gan(
         writer.writerow(['epoch', 'g_loss', 'd_loss', 'time_seconds'])
 
     print("\n" + "=" * 70)
-    print("Starting Conditional GAN Training")
+    print("Starting Multi-Attribute Conditional GAN Training")
+    print("=" * 70)
+    print(f"Attributes ({len(attribute_names)}): {', '.join(attribute_names)}")
     print("=" * 70)
 
     total_start_time = time.time()
     num_batches = train_size // batch_size
+
+    # Initialize for final summary
+    avg_g_loss = 0.0
+    avg_d_loss = 0.0
 
     for epoch in range(epochs):
         epoch_start = time.time()
@@ -340,15 +370,12 @@ def train_conditional_gan(
         print(f"Epoch {epoch+1}/{epochs}")
         print(f"{'='*70}")
 
-        for batch_idx, (real_images, real_scores) in enumerate(train_ds):
+        for batch_idx, (real_images, real_attributes) in enumerate(train_ds):
             batch_start = time.time()
-
-            # Reshape scores to [B, 1]
-            real_scores = tf.reshape(real_scores, [-1, 1])
 
             g_loss, d_loss = train_step(
                 generator, discriminator, g_opt, d_opt,
-                real_images, real_scores, latent_dim, batch_size
+                real_images, real_attributes, latent_dim, batch_size
             )
 
             g_losses.append(float(g_loss))
@@ -392,7 +419,7 @@ def train_conditional_gan(
 
         # Generate preview
         if (epoch + 1) % preview_every == 0 or epoch == 0:
-            generate_preview(generator, latent_dim, attribute_name, epoch, out_dir)
+            generate_multi_attribute_preview(generator, latent_dim, attribute_names, epoch + 1, out_dir)
 
         # Save checkpoint
         if (epoch + 1) % save_every == 0:
@@ -405,8 +432,9 @@ def train_conditional_gan(
     # Final summary
     total_training_time = time.time() - total_start_time
     print(f"\n{'='*70}")
-    print("✅ TRAINING COMPLETE!")
+    print("✅ MULTI-ATTRIBUTE TRAINING COMPLETE!")
     print(f"{'='*70}")
+    print(f"  Attributes: {', '.join(attribute_names)}")
     print(f"  Total Epochs: {epochs}")
     print(f"  Total Time: {total_training_time/60:.1f}m ({total_training_time/3600:.2f}h)")
     print(f"  Avg Time per Epoch: {total_training_time/epochs:.1f}s")
@@ -419,21 +447,22 @@ def train_conditional_gan(
 # ==================== MAIN ====================
 
 def main():
-    parser = argparse.ArgumentParser(description="Train Conditional GAN")
+    parser = argparse.ArgumentParser(description="Train Multi-Attribute Conditional GAN")
 
     # Data
-    parser.add_argument('--train_csv', type=str, default='data/wealthy_scores_train.csv',
-                        help='Training CSV with image_id and attribute scores')
-    parser.add_argument('--val_csv', type=str, default='data/wealthy_scores_val.csv',
+    parser.add_argument('--train_csv', type=str, default='data/all_attribute_scores_train.csv',
+                        help='Training CSV with image_id and ALL attribute scores')
+    parser.add_argument('--val_csv', type=str, default='data/all_attribute_scores_val.csv',
                         help='Validation CSV')
     parser.add_argument('--image_dir', type=str, default='data/preprocessed_images',
                         help='Directory with preprocessed images')
-    parser.add_argument('--attribute_name', type=str, default='wealthy_score',
-                        help='Name of attribute column in CSV')
+    parser.add_argument('--attribute_names', type=str, nargs='+',
+                        default=['wealthy', 'depressing', 'safety', 'lively', 'boring', 'beautiful'],
+                        help='Names of attribute columns in CSV (space-separated)')
 
     # Model
     parser.add_argument('--image_size', type=int, default=64)
-    parser.add_argument('--latent_dim', type=int, default=128)
+    parser.add_argument('--latent_dim', type=int, default=256)
     parser.add_argument('--batch_size', type=int, default=128)
 
     # Training
@@ -445,41 +474,57 @@ def main():
 
     # Output
     parser.add_argument('--out_dir', type=str,
-                        default=f'results/conditional_gan_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+                        default=f'results/multi_attribute_gan_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
 
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    num_attributes = len(args.attribute_names)
+
     print("=" * 70)
-    print("Conditional GAN - Attribute-Controllable Image Generation")
+    print("Multi-Attribute Conditional GAN - Urban Scene Generation")
     print("=" * 70)
-    print(f"Attribute: {args.attribute_name}")
+    print(f"Attributes ({num_attributes}): {', '.join(args.attribute_names)}")
     print(f"Image size: {args.image_size}x{args.image_size}")
     print(f"Batch size: {args.batch_size}")
+    print(f"Latent dim: {args.latent_dim}")
+    print(f"Total input dim: {args.latent_dim + num_attributes}")
     print(f"Epochs: {args.epochs}")
     print(f"Output: {out_dir}")
     print()
 
     # Load datasets
     print("Loading datasets...")
-    train_ds, train_size = make_conditional_dataset(
-        args.train_csv, args.image_dir, args.attribute_name,
+    train_ds, train_size = make_multi_attribute_dataset(
+        args.train_csv, args.image_dir, args.attribute_names,
         args.image_size, args.batch_size, shuffle=True
     )
-    val_ds, val_size = make_conditional_dataset(
-        args.val_csv, args.image_dir, args.attribute_name,
+    val_ds, val_size = make_multi_attribute_dataset(
+        args.val_csv, args.image_dir, args.attribute_names,
         args.image_size, args.batch_size, shuffle=False
     )
 
-    # Build models
-    print("\nBuilding models...")
-    generator = make_conditional_generator(args.image_size, args.latent_dim, num_attributes=1)
-    discriminator = make_conditional_discriminator(args.image_size, num_attributes=1)
-
-    generator.summary()
+    print(f"\nDataset Summary:")
+    print(f"  Training images: {train_size:,}")
+    print(f"  Validation images: {val_size:,}")
+    print(f"  Batches per epoch: {train_size // args.batch_size}")
     print()
+
+    # Build models
+    print("Building models...")
+    generator = make_multi_attribute_generator(
+        args.image_size, args.latent_dim, num_attributes
+    )
+    discriminator = make_multi_attribute_discriminator(
+        args.image_size, num_attributes
+    )
+
+    # Print model summaries
+    print("\nGenerator:")
+    generator.summary()
+    print("\nDiscriminator:")
     discriminator.summary()
 
     # Optimizers
@@ -487,11 +532,12 @@ def main():
     d_opt = tf.keras.optimizers.Adam(learning_rate=args.lr, beta_1=args.beta1)
 
     # Train
-    train_conditional_gan(
+    train_multi_attribute_gan(
         train_ds, val_ds, train_size, val_size,
-        generator, discriminator, g_opt, d_opt,
+        generator, discriminator,
+        g_opt, d_opt,
         args.latent_dim, args.batch_size, args.epochs,
-        out_dir, args.attribute_name,
+        out_dir, args.attribute_names,
         args.save_every, args.preview_every
     )
 
