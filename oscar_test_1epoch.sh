@@ -65,20 +65,24 @@ echo ""
 CUDA_HOME=$(dirname $(dirname $(which nvcc)))
 
 # Find cuDNN from environment variables set by module load
-# The module should set CUDNN_ROOT or similar
 echo "Searching for cuDNN installation..."
 echo "Module environment variables:"
 env | grep -i cudnn || echo "No CUDNN env vars found"
 echo ""
 
-# Try to find cuDNN library location
+# Try to find cuDNN library location - need the actual archive directory with full libraries
 if [ -n "$CUDNN_ROOT" ]; then
     CUDNN_HOME=$CUDNN_ROOT
 elif [ -n "$CUDNN_DIR" ]; then
     CUDNN_HOME=$CUDNN_DIR
 else
-    # Search common locations
-    for dir in /gpfs/runtime/opt/cudnn/8.6.0 /oscar/runtime/opt/cudnn/8.6.0 /oscar/rt/*/software/*/cudnn-8.6.0* $CUDA_HOME; do
+    # Search common locations - prefer the full archive directory
+    for dir in \
+        /gpfs/runtime/opt/cudnn/8.6.0/src/cudnn-linux-x86_64-8.6.0.163_cuda11-archive \
+        /gpfs/runtime/opt/cudnn/8.6.0 \
+        /oscar/runtime/opt/cudnn/8.6.0 \
+        /oscar/rt/*/software/*/cudnn-8.6.0* \
+        $CUDA_HOME; do
         if [ -f "$dir/lib64/libcudnn.so" ] || [ -f "$dir/lib/libcudnn.so" ]; then
             CUDNN_HOME=$dir
             echo "Found cuDNN at: $CUDNN_HOME"
@@ -91,58 +95,95 @@ echo "Setting CUDA paths:"
 echo "CUDA_HOME: $CUDA_HOME"
 echo "CUDNN_HOME: $CUDNN_HOME"
 
-# Find the actual lib directory (lib64 or lib)
+# Find the actual lib directory (lib64 or lib) and add both possible locations
+CUDNN_LIB_PATHS=""
 if [ -d "$CUDNN_HOME/lib64" ]; then
-    CUDNN_LIB=$CUDNN_HOME/lib64
-elif [ -d "$CUDNN_HOME/lib" ]; then
-    CUDNN_LIB=$CUDNN_HOME/lib
-else
-    CUDNN_LIB=$CUDNN_HOME
+    CUDNN_LIB_PATHS="$CUDNN_HOME/lib64"
+fi
+if [ -d "$CUDNN_HOME/lib" ]; then
+    CUDNN_LIB_PATHS="$CUDNN_LIB_PATHS:$CUDNN_HOME/lib"
+fi
+# Also add the archive subdirectory if it exists
+if [ -d "$CUDNN_HOME/src/cudnn-linux-x86_64-8.6.0.163_cuda11-archive/lib" ]; then
+    CUDNN_LIB_PATHS="$CUDNN_LIB_PATHS:$CUDNN_HOME/src/cudnn-linux-x86_64-8.6.0.163_cuda11-archive/lib"
 fi
 
 export CUDA_HOME
 export CUDNN_HOME
 export XLA_FLAGS=--xla_gpu_cuda_data_dir=$CUDA_HOME
-export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDNN_LIB:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDNN_LIB_PATHS:$LD_LIBRARY_PATH
 export PATH=$CUDA_HOME/bin:$PATH
 
-echo "Updated LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+echo "Updated LD_LIBRARY_PATH:"
+echo "$LD_LIBRARY_PATH" | tr ':' '\n' | nl
 echo ""
 
 # Check CUDA libraries are accessible
 echo "Checking CUDA libraries:"
-ls -la $CUDA_HOME/lib64/libcudart.so* 2>&1 | head -5
+ls -la $CUDA_HOME/lib64/libcudart.so* 2>&1 | head -3
+ls -la $CUDA_HOME/lib64/libcublas.so* 2>&1 | head -3
 echo ""
 echo "Checking cuDNN libraries:"
 find $CUDNN_HOME -name "libcudnn.so*" 2>/dev/null | head -5
-ls -la $CUDNN_LIB/libcudnn.so* 2>&1 | head -5
+for libdir in $(echo $CUDNN_LIB_PATHS | tr ':' ' '); do
+    if [ -d "$libdir" ]; then
+        echo "In $libdir:"
+        ls -la $libdir/libcudnn*.so* 2>&1 | head -3
+    fi
+done
 echo ""
 
 # Verify GPU with detailed TensorFlow diagnostics
 echo "GPU Check (TensorFlow):"
 python -c "
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'  # Show all TensorFlow logs
+import sys
+
+# Enable all TensorFlow logging to see the actual error
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
+os.environ['TF_CPP_VMODULE'] = 'gpu_device=10'
+
+print('Loading TensorFlow...')
 import tensorflow as tf
 print('TensorFlow version:', tf.__version__)
 print('Built with CUDA:', tf.test.is_built_with_cuda())
-print('GPU devices:', tf.config.list_physical_devices('GPU'))
-if len(tf.config.list_physical_devices('GPU')) > 0:
-    print('✅ GPU DETECTED')
-else:
-    print('❌ NO GPU DETECTED')
-    print('Checking CUDA libraries...')
-    import ctypes
+
+# Try to list physical devices with error handling
+try:
+    print('Attempting to list GPU devices...')
+    gpu_devices = tf.config.list_physical_devices('GPU')
+    print('GPU devices:', gpu_devices)
+
+    if len(gpu_devices) > 0:
+        print('✅ GPU DETECTED')
+        for gpu in gpu_devices:
+            print(f'  - {gpu}')
+    else:
+        print('❌ NO GPU DETECTED')
+except Exception as e:
+    print(f'❌ ERROR detecting GPU: {e}')
+    import traceback
+    traceback.print_exc()
+
+# Check if libraries can be loaded
+print('')
+print('Checking CUDA libraries...')
+import ctypes
+libs_to_check = [
+    'libcudart.so',
+    'libcudart.so.11.0',
+    'libcudnn.so',
+    'libcudnn.so.8',
+    'libcublas.so',
+    'libcublasLt.so',
+]
+
+for lib in libs_to_check:
     try:
-        ctypes.CDLL('libcudart.so')
-        print('  ✅ libcudart.so found')
-    except:
-        print('  ❌ libcudart.so NOT found')
-    try:
-        ctypes.CDLL('libcudnn.so')
-        print('  ✅ libcudnn.so found')
-    except:
-        print('  ❌ libcudnn.so NOT found')
+        ctypes.CDLL(lib)
+        print(f'  ✅ {lib} found')
+    except Exception as e:
+        print(f'  ❌ {lib} NOT found: {e}')
 "
 echo ""
 
