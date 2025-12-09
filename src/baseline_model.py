@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 
 #!/usr/bin/env python3
-# train a BASELINE gan that gives some interesting images without aesthetic ratings
+# train a BASELINE gan that gives some interesting images with urban data
 
 ## USAGE: 
 """
