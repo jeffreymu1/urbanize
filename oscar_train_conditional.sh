@@ -36,6 +36,10 @@ module load cudnn/8.6.0
 # Activate virtual environment
 source .venv/bin/activate
 
+# Set CUDA environment variables explicitly
+export XLA_FLAGS=--xla_gpu_cuda_data_dir=/gpfs/runtime/opt/cuda/11.8.0
+export LD_LIBRARY_PATH=/gpfs/runtime/opt/cuda/11.8.0/lib64:/gpfs/runtime/opt/cudnn/8.6.0/lib64:$LD_LIBRARY_PATH
+
 # Verify GPU is available
 echo "Checking GPU availability..."
 python -c "import tensorflow as tf; print(f'GPUs Available: {tf.config.list_physical_devices(\"GPU\")}')"

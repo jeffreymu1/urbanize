@@ -24,8 +24,24 @@ module load python/3.11.0
 module load cuda/11.8.0
 module load cudnn/8.6.0
 
+echo "Modules loaded:"
+module list
+echo ""
+
+echo "CUDA Environment:"
+echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+which nvcc
+nvcc --version
+nvidia-smi
+echo ""
+
 # Activate virtual environment
 source .venv/bin/activate
+
+# Set CUDA environment variables explicitly
+export XLA_FLAGS=--xla_gpu_cuda_data_dir=/gpfs/runtime/opt/cuda/11.8.0
+export LD_LIBRARY_PATH=/gpfs/runtime/opt/cuda/11.8.0/lib64:/gpfs/runtime/opt/cudnn/8.6.0/lib64:$LD_LIBRARY_PATH
 
 # Verify GPU
 echo "GPU Check:"
