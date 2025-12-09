@@ -39,13 +39,61 @@ echo ""
 # Activate virtual environment
 source .venv/bin/activate
 
-# Set CUDA environment variables explicitly
-export XLA_FLAGS=--xla_gpu_cuda_data_dir=/gpfs/runtime/opt/cuda/11.8.0
-export LD_LIBRARY_PATH=/gpfs/runtime/opt/cuda/11.8.0/lib64:/gpfs/runtime/opt/cudnn/8.6.0/lib64:$LD_LIBRARY_PATH
+# Print Python and TensorFlow info
+echo "Python environment:"
+which python
+python --version
+echo ""
 
-# Verify GPU
-echo "GPU Check:"
-python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+# Set CUDA environment variables explicitly for TensorFlow
+# Find CUDA installation path from loaded module
+CUDA_HOME=$(dirname $(dirname $(which nvcc)))
+CUDNN_HOME=/gpfs/runtime/opt/cudnn/8.6.0
+
+echo "Setting CUDA paths:"
+echo "CUDA_HOME: $CUDA_HOME"
+echo "CUDNN_HOME: $CUDNN_HOME"
+
+export CUDA_HOME
+export XLA_FLAGS=--xla_gpu_cuda_data_dir=$CUDA_HOME
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDNN_HOME/lib64:$LD_LIBRARY_PATH
+export PATH=$CUDA_HOME/bin:$PATH
+
+echo "Updated LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+echo ""
+
+# Check CUDA libraries are accessible
+echo "Checking CUDA libraries:"
+ls -la $CUDA_HOME/lib64/libcudart.so* 2>&1 | head -5
+ls -la $CUDNN_HOME/lib64/libcudnn.so* 2>&1 | head -5
+echo ""
+
+# Verify GPU with detailed TensorFlow diagnostics
+echo "GPU Check (TensorFlow):"
+python -c "
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'  # Show all TensorFlow logs
+import tensorflow as tf
+print('TensorFlow version:', tf.__version__)
+print('Built with CUDA:', tf.test.is_built_with_cuda())
+print('GPU devices:', tf.config.list_physical_devices('GPU'))
+if len(tf.config.list_physical_devices('GPU')) > 0:
+    print('✅ GPU DETECTED')
+else:
+    print('❌ NO GPU DETECTED')
+    print('Checking CUDA libraries...')
+    import ctypes
+    try:
+        ctypes.CDLL('libcudart.so')
+        print('  ✅ libcudart.so found')
+    except:
+        print('  ❌ libcudart.so NOT found')
+    try:
+        ctypes.CDLL('libcudnn.so')
+        print('  ✅ libcudnn.so found')
+    except:
+        print('  ❌ libcudnn.so NOT found')
+"
 echo ""
 
 # Create logs directory

@@ -36,13 +36,24 @@ module load cudnn/8.6.0
 # Activate virtual environment
 source .venv/bin/activate
 
-# Set CUDA environment variables explicitly
-export XLA_FLAGS=--xla_gpu_cuda_data_dir=/gpfs/runtime/opt/cuda/11.8.0
-export LD_LIBRARY_PATH=/gpfs/runtime/opt/cuda/11.8.0/lib64:/gpfs/runtime/opt/cudnn/8.6.0/lib64:$LD_LIBRARY_PATH
+# Set CUDA environment variables explicitly for TensorFlow
+CUDA_HOME=$(dirname $(dirname $(which nvcc)))
+CUDNN_HOME=/gpfs/runtime/opt/cudnn/8.6.0
+
+export CUDA_HOME
+export XLA_FLAGS=--xla_gpu_cuda_data_dir=$CUDA_HOME
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDNN_HOME/lib64:$LD_LIBRARY_PATH
+export PATH=$CUDA_HOME/bin:$PATH
 
 # Verify GPU is available
 echo "Checking GPU availability..."
-python -c "import tensorflow as tf; print(f'GPUs Available: {tf.config.list_physical_devices(\"GPU\")}')"
+python -c "
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
+import tensorflow as tf
+print(f'TensorFlow version: {tf.__version__}')
+print(f'GPUs Available: {tf.config.list_physical_devices(\"GPU\")}')
+"
 echo ""
 
 # Create timestamped output directory
