@@ -25,7 +25,12 @@ echo "=========================================="
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
-echo "GPU: $CUDA_VISIBLE_DEVICES"
+echo ""
+
+echo "SLURM GPU Allocation:"
+echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+echo "SLURM_JOB_GPUS: $SLURM_JOB_GPUS"
+scontrol show job $SLURM_JOB_ID | grep -i gres
 echo ""
 
 # Load modules
@@ -46,16 +51,32 @@ fi
 # Activate virtual environment
 source .venv/bin/activate
 
+# Ensure CUDA_VISIBLE_DEVICES is set
+if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
+    if [ -n "$SLURM_JOB_GPUS" ]; then
+        export CUDA_VISIBLE_DEVICES=$SLURM_JOB_GPUS
+    elif [ -n "$SLURM_STEP_GPUS" ]; then
+        export CUDA_VISIBLE_DEVICES=$SLURM_STEP_GPUS
+    else
+        export CUDA_VISIBLE_DEVICES=0
+    fi
+fi
+
 # Set CUDA environment variables explicitly for TensorFlow
 CUDA_HOME=$(dirname $(dirname $(which nvcc)))
 
-# Find cuDNN from environment or search common locations
+# Find cuDNN - prefer the full archive directory with all libraries
 if [ -n "$CUDNN_ROOT" ]; then
     CUDNN_HOME=$CUDNN_ROOT
 elif [ -n "$CUDNN_DIR" ]; then
     CUDNN_HOME=$CUDNN_DIR
 else
-    for dir in /gpfs/runtime/opt/cudnn/8.6.0 /oscar/runtime/opt/cudnn/8.6.0 /oscar/rt/*/software/*/cudnn-8.6.0* $CUDA_HOME; do
+    for dir in \
+        /gpfs/runtime/opt/cudnn/8.6.0/src/cudnn-linux-x86_64-8.6.0.163_cuda11-archive \
+        /gpfs/runtime/opt/cudnn/8.6.0 \
+        /oscar/runtime/opt/cudnn/8.6.0 \
+        /oscar/rt/*/software/*/cudnn-8.6.0* \
+        $CUDA_HOME; do
         if [ -f "$dir/lib64/libcudnn.so" ] || [ -f "$dir/lib/libcudnn.so" ]; then
             CUDNN_HOME=$dir
             break
@@ -63,19 +84,22 @@ else
     done
 fi
 
-# Find the actual lib directory
+# Add all cuDNN library paths
+CUDNN_LIB_PATHS=""
 if [ -d "$CUDNN_HOME/lib64" ]; then
-    CUDNN_LIB=$CUDNN_HOME/lib64
-elif [ -d "$CUDNN_HOME/lib" ]; then
-    CUDNN_LIB=$CUDNN_HOME/lib
-else
-    CUDNN_LIB=$CUDNN_HOME
+    CUDNN_LIB_PATHS="$CUDNN_HOME/lib64"
+fi
+if [ -d "$CUDNN_HOME/lib" ]; then
+    CUDNN_LIB_PATHS="$CUDNN_LIB_PATHS:$CUDNN_HOME/lib"
+fi
+if [ -d "$CUDNN_HOME/src/cudnn-linux-x86_64-8.6.0.163_cuda11-archive/lib" ]; then
+    CUDNN_LIB_PATHS="$CUDNN_LIB_PATHS:$CUDNN_HOME/src/cudnn-linux-x86_64-8.6.0.163_cuda11-archive/lib"
 fi
 
 export CUDA_HOME
 export CUDNN_HOME
 export XLA_FLAGS=--xla_gpu_cuda_data_dir=$CUDA_HOME
-export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDNN_LIB:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDNN_LIB_PATHS:$LD_LIBRARY_PATH
 export PATH=$CUDA_HOME/bin:$PATH
 
 # Verify GPU is available

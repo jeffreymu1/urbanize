@@ -45,10 +45,24 @@ echo ""
 
 echo "CUDA Environment:"
 echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+echo "SLURM_JOB_GPUS: $SLURM_JOB_GPUS"
+echo "SLURM_STEP_GPUS: $SLURM_STEP_GPUS"
+echo "GPU_DEVICE_ORDINAL: $GPU_DEVICE_ORDINAL"
 echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+echo ""
+
+echo "SLURM GPU Allocation:"
+scontrol show job $SLURM_JOB_ID | grep -i gres
+echo ""
+
+echo "NVIDIA SMI:"
+nvidia-smi -L  # List GPUs
+nvidia-smi --query-gpu=index,name,driver_version,memory.total --format=csv
+echo ""
+
+echo "NVCC:"
 which nvcc
 nvcc --version
-nvidia-smi
 echo ""
 
 # Activate virtual environment
@@ -58,6 +72,27 @@ source .venv/bin/activate
 echo "Python environment:"
 which python
 python --version
+echo ""
+
+# CRITICAL FIX: Ensure CUDA_VISIBLE_DEVICES is set
+# SLURM should set this, but sometimes it doesn't
+if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
+    echo "WARNING: CUDA_VISIBLE_DEVICES not set by SLURM!"
+    # Try to get GPU from SLURM variables
+    if [ -n "$SLURM_JOB_GPUS" ]; then
+        export CUDA_VISIBLE_DEVICES=$SLURM_JOB_GPUS
+        echo "Set CUDA_VISIBLE_DEVICES from SLURM_JOB_GPUS: $CUDA_VISIBLE_DEVICES"
+    elif [ -n "$SLURM_STEP_GPUS" ]; then
+        export CUDA_VISIBLE_DEVICES=$SLURM_STEP_GPUS
+        echo "Set CUDA_VISIBLE_DEVICES from SLURM_STEP_GPUS: $CUDA_VISIBLE_DEVICES"
+    else
+        # Last resort - assume GPU 0 since we requested gres=gpu:1
+        export CUDA_VISIBLE_DEVICES=0
+        echo "Set CUDA_VISIBLE_DEVICES to 0 (default)"
+    fi
+else
+    echo "CUDA_VISIBLE_DEVICES already set: $CUDA_VISIBLE_DEVICES"
+fi
 echo ""
 
 # Set CUDA environment variables explicitly for TensorFlow
