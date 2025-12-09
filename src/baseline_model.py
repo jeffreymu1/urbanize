@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
     --out_dir ../results/ \
     --image_size 64 \
     --batch_size 128 \
-    --epochs 1
+    --epochs 1 --fid_every 5 --fid_num_samples 256
 """
 
 
@@ -64,6 +64,116 @@ def disc_confidence(disc, real_images, fake_images):
     fake_p = tf.sigmoid(disc(fake_images, training=False))
 
     return float(tf.reduce_mean(real_p).numpy()), float(tf.reduce_mean(fake_p).numpy())
+
+# -------------------------
+# FID (cheap-ish) helpers (by chat)
+# -------------------------
+
+def _get_inception():
+    # InceptionV3 embeddings (2048-d) used for FID-like comparison
+    return tf.keras.applications.InceptionV3(
+        include_top=False,
+        weights="imagenet",
+        pooling="avg",
+        input_shape=(299, 299, 3),
+    )
+
+@tf.function
+def _inception_acts(inception, images):
+    """
+    images: float32 in [-1, 1], shape [B, H, W, 3]
+    returns: float32 activations [B, 2048]
+    """
+    # [-1,1] -> [0,255]
+    x = (images + 1.0) * 127.5
+    x = tf.clip_by_value(x, 0.0, 255.0)
+    x = tf.image.resize(x, [299, 299], antialias=True)
+    x = tf.keras.applications.inception_v3.preprocess_input(x)  # expects 0..255 -> [-1,1]
+    return inception(x, training=False)
+
+def _stats_from_acts(acts_np: np.ndarray):
+    acts_np = acts_np.astype(np.float64)
+    mu = np.mean(acts_np, axis=0)
+    sigma = np.cov(acts_np, rowvar=False)
+    return mu, sigma
+
+def _frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
+    """
+    FID = ||mu1-mu2||^2 + Tr(sigma1 + sigma2 - 2*sqrt(sigma1*sigma2))
+    Uses tf.linalg.sqrtm (no SciPy).
+    """
+    mu1 = mu1.astype(np.float64); mu2 = mu2.astype(np.float64)
+    sigma1 = sigma1.astype(np.float64); sigma2 = sigma2.astype(np.float64)
+
+    diff = mu1 - mu2
+    k = sigma1.shape[0]
+    sigma1 = sigma1 + np.eye(k) * eps
+    sigma2 = sigma2 + np.eye(k) * eps
+
+    prod = sigma1 @ sigma2
+    covmean = tf.linalg.sqrtm(tf.cast(prod, tf.complex64))
+    covmean = tf.math.real(covmean).numpy()
+
+    # occasionally sqrtm can get unstable; retry with bigger eps if needed
+    if not np.isfinite(covmean).all():
+        prod = (sigma1 + np.eye(k) * (10 * eps)) @ (sigma2 + np.eye(k) * (10 * eps))
+        covmean = tf.math.real(tf.linalg.sqrtm(tf.cast(prod, tf.complex64))).numpy()
+
+    fid = diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2.0 * np.trace(covmean)
+    return float(np.real(fid))
+
+def _collect_real_stats(ds_eval, inception, num_samples: int):
+    acts = []
+    seen = 0
+    for batch in ds_eval:  # ds_eval is NOT shuffled in your code
+        a = _inception_acts(inception, tf.cast(batch, tf.float32)).numpy()
+        acts.append(a)
+        seen += a.shape[0]
+        if seen >= num_samples:
+            break
+    acts = np.concatenate(acts, axis=0)[:num_samples]
+    return _stats_from_acts(acts)
+
+def _collect_fake_stats(gen, latent_dim: int, inception, num_samples: int, batch_size: int):
+    acts = []
+    seen = 0
+    while seen < num_samples:
+        bs = min(batch_size, num_samples - seen)
+        z = tf.random.normal([bs, latent_dim])
+        fake = gen(z, training=False)
+        a = _inception_acts(inception, tf.cast(fake, tf.float32)).numpy()
+        acts.append(a)
+        seen += a.shape[0]
+    acts = np.concatenate(acts, axis=0)[:num_samples]
+    return _stats_from_acts(acts)
+
+def setup_fid(ds_eval, out_dir: Path, num_samples: int):
+    """
+    One-time setup: create inception model + compute/cache real stats.
+    Returns (inception, real_mu, real_sigma).
+    """
+    stats_path = out_dir / f"fid_real_stats_{num_samples}.npz"
+    inception = _get_inception()
+
+    if stats_path.exists():
+        arr = np.load(stats_path)
+        real_mu = arr["mu"]
+        real_sigma = arr["sigma"]
+        print(f"[FID] loaded cached real stats: {stats_path}")
+    else:
+        print(f"[FID] computing real stats on {num_samples} real images (one-time)...")
+        real_mu, real_sigma = _collect_real_stats(ds_eval, inception, num_samples=num_samples)
+        np.savez(stats_path, mu=real_mu, sigma=real_sigma)
+        print(f"[FID] saved real stats: {stats_path}")
+
+    return inception, real_mu, real_sigma
+
+def compute_fid(gen, latent_dim: int, inception, real_mu, real_sigma, num_samples: int, batch_size: int):
+    fake_mu, fake_sigma = _collect_fake_stats(
+        gen, latent_dim=latent_dim, inception=inception,
+        num_samples=num_samples, batch_size=batch_size
+    )
+    return _frechet_distance(real_mu, real_sigma, fake_mu, fake_sigma)
 
 
 
@@ -145,6 +255,9 @@ def main():
     parser.add_argument("--save_every", type=int, default=5)
     parser.add_argument("--num_preview", type=int, default=16)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--fid_every", type=int, default=5)        # 0 disables
+    parser.add_argument("--fid_num_samples", type=int, default=512) # keep small for speed
+
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -169,6 +282,17 @@ def main():
     ds_train = make_dataset(files, args.image_size, args.batch_size, args.shuffle_buffer, shuffle=True)
     ds_eval = make_dataset(files, args.image_size, args.batch_size, args.shuffle_buffer, shuffle=False)
     
+    # fid setup
+    fid_inception = None
+    fid_real_mu = None
+    fid_real_sigma = None
+    if args.fid_every > 0:
+        fid_inception, fid_real_mu, fid_real_sigma = setup_fid(
+            ds_eval=ds_eval,
+            out_dir=out_dir,
+            num_samples=args.fid_num_samples
+        )
+
     gen = make_generator(args.image_size, args.latent_dim)
     disc = make_discriminator(args.image_size)
     print(gen.summary())
@@ -222,6 +346,8 @@ def main():
     metrics_rows = []
     eval_ds_iter = iter(ds_eval)
 
+    last_fid = np.nan
+
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
         g_vals, d_vals = [], []
@@ -250,6 +376,21 @@ def main():
         d_real, d_fake = disc_confidence(disc, real_batch_eval, fake_batch)
         d_real_logit = float(tf.reduce_mean(disc(real_batch_eval, training=False)).numpy())
         d_fake_logit = float(tf.reduce_mean(disc(fake_batch, training=False)).numpy())
+        
+        # compute fid
+        fid_val = None
+        if args.fid_every > 0 and (epoch == 1 or epoch == args.epochs or epoch % args.fid_every == 0):
+            fid_val = compute_fid(
+                gen=gen,
+                latent_dim=args.latent_dim,
+                inception=fid_inception,
+                real_mu=fid_real_mu,
+                real_sigma=fid_real_sigma,
+                num_samples=args.fid_num_samples,
+                batch_size=args.batch_size,)
+            last_fid = fid_val
+            print(f"FID {fid_val:.3f}")
+
 
         print(f"D(real)={d_real:.3f}  D(fake)={d_fake:.3f}")
 
@@ -262,6 +403,7 @@ def main():
             "d_real_logit": d_real_logit,
             "d_fake_logit": d_fake_logit,
             "epoch_seconds": time.time() - t0,
+            "fid": last_fid,
         })
 
         if epoch == 1 or epoch == args.epochs or (epoch % args.save_every == 0):
