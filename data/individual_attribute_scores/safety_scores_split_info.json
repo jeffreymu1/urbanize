@@ -1,0 +1,10 @@
+{
+  "total_images": 104509,
+  "train_images": 83607,
+  "val_images": 10450,
+  "test_images": 10452,
+  "train_frac": 0.8,
+  "val_frac": 0.1,
+  "test_frac": 0.09999999999999995,
+  "random_seed": 42
+}
