@@ -319,6 +319,9 @@ def train_conditional_gan(
     print("Starting Conditional GAN Training")
     print("=" * 70)
 
+    total_start_time = time.time()
+    num_batches = train_size // batch_size
+
     for epoch in range(epochs):
         epoch_start = time.time()
 
@@ -326,7 +329,13 @@ def train_conditional_gan(
         g_losses = []
         d_losses = []
 
+        print(f"\n{'='*70}")
+        print(f"Epoch {epoch+1}/{epochs}")
+        print(f"{'='*70}")
+
         for batch_idx, (real_images, real_scores) in enumerate(train_ds):
+            batch_start = time.time()
+
             # Reshape scores to [B, 1]
             real_scores = tf.reshape(real_scores, [-1, 1])
 
@@ -338,12 +347,36 @@ def train_conditional_gan(
             g_losses.append(float(g_loss))
             d_losses.append(float(d_loss))
 
+            # Progress update every 50 batches or first/last batch
+            if batch_idx % 50 == 0 or batch_idx == num_batches - 1:
+                batch_time = time.time() - batch_start
+                avg_batch_time = (time.time() - epoch_start) / (batch_idx + 1)
+                eta_seconds = avg_batch_time * (num_batches - batch_idx - 1)
+                eta_mins = eta_seconds / 60
+
+                progress_pct = (batch_idx + 1) / num_batches * 100
+                print(f"  Batch {batch_idx+1:4d}/{num_batches} ({progress_pct:5.1f}%) | "
+                      f"G: {float(g_loss):.4f} D: {float(d_loss):.4f} | "
+                      f"ETA: {eta_mins:.1f}m", flush=True)
+
         avg_g_loss = np.mean(g_losses)
         avg_d_loss = np.mean(d_losses)
         epoch_time = time.time() - epoch_start
+        total_elapsed = time.time() - total_start_time
 
-        print(f"Epoch {epoch+1:3d}/{epochs} | G Loss: {avg_g_loss:.4f} | "
-              f"D Loss: {avg_d_loss:.4f} | Time: {epoch_time:.1f}s")
+        # Calculate ETA for remaining epochs
+        avg_epoch_time = total_elapsed / (epoch + 1)
+        remaining_epochs = epochs - (epoch + 1)
+        eta_total_mins = (avg_epoch_time * remaining_epochs) / 60
+
+        print(f"\n{'='*70}")
+        print(f"Epoch {epoch+1}/{epochs} Complete")
+        print(f"  G Loss: {avg_g_loss:.4f} | D Loss: {avg_d_loss:.4f}")
+        print(f"  Epoch Time: {epoch_time:.1f}s ({epoch_time/60:.1f}m)")
+        print(f"  Total Elapsed: {total_elapsed/60:.1f}m ({total_elapsed/3600:.2f}h)")
+        if remaining_epochs > 0:
+            print(f"  ETA for {remaining_epochs} epochs: {eta_total_mins:.1f}m ({eta_total_mins/60:.2f}h)")
+        print(f"{'='*70}")
 
         # Save metrics
         with open(metrics_path, 'a', newline='') as f:
@@ -361,7 +394,19 @@ def train_conditional_gan(
 
     # Final save
     final_ckpt = ckpt_manager.save()
-    print(f"\n✅ Training complete! Final checkpoint: {final_ckpt}")
+
+    # Final summary
+    total_training_time = time.time() - total_start_time
+    print(f"\n{'='*70}")
+    print("✅ TRAINING COMPLETE!")
+    print(f"{'='*70}")
+    print(f"  Total Epochs: {epochs}")
+    print(f"  Total Time: {total_training_time/60:.1f}m ({total_training_time/3600:.2f}h)")
+    print(f"  Avg Time per Epoch: {total_training_time/epochs:.1f}s")
+    print(f"  Final G Loss: {avg_g_loss:.4f}")
+    print(f"  Final D Loss: {avg_d_loss:.4f}")
+    print(f"  Final Checkpoint: {final_ckpt}")
+    print(f"{'='*70}\n")
 
 
 # ==================== MAIN ====================
