@@ -31,18 +31,51 @@ echo ""
 # Load modules
 module load python/3.11.0
 module load cuda/11.8.0
-module load cudnn/8.6.0
+
+# Try to load cuDNN - try multiple versions
+if module load cudnn/8.6.0 2>/dev/null; then
+    echo "Loaded cudnn/8.6.0"
+elif module load cudnn/8.9.0 2>/dev/null; then
+    echo "Loaded cudnn/8.9.0"
+elif module load cudnn/8.7.0 2>/dev/null; then
+    echo "Loaded cudnn/8.7.0"
+else
+    echo "Warning: Could not load cuDNN module"
+fi
 
 # Activate virtual environment
 source .venv/bin/activate
 
 # Set CUDA environment variables explicitly for TensorFlow
 CUDA_HOME=$(dirname $(dirname $(which nvcc)))
-CUDNN_HOME=/gpfs/runtime/opt/cudnn/8.6.0
+
+# Find cuDNN from environment or search common locations
+if [ -n "$CUDNN_ROOT" ]; then
+    CUDNN_HOME=$CUDNN_ROOT
+elif [ -n "$CUDNN_DIR" ]; then
+    CUDNN_HOME=$CUDNN_DIR
+else
+    for dir in /gpfs/runtime/opt/cudnn/8.6.0 /oscar/runtime/opt/cudnn/8.6.0 /oscar/rt/*/software/*/cudnn-8.6.0* $CUDA_HOME; do
+        if [ -f "$dir/lib64/libcudnn.so" ] || [ -f "$dir/lib/libcudnn.so" ]; then
+            CUDNN_HOME=$dir
+            break
+        fi
+    done
+fi
+
+# Find the actual lib directory
+if [ -d "$CUDNN_HOME/lib64" ]; then
+    CUDNN_LIB=$CUDNN_HOME/lib64
+elif [ -d "$CUDNN_HOME/lib" ]; then
+    CUDNN_LIB=$CUDNN_HOME/lib
+else
+    CUDNN_LIB=$CUDNN_HOME
+fi
 
 export CUDA_HOME
+export CUDNN_HOME
 export XLA_FLAGS=--xla_gpu_cuda_data_dir=$CUDA_HOME
-export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDNN_HOME/lib64:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDNN_LIB:$LD_LIBRARY_PATH
 export PATH=$CUDA_HOME/bin:$PATH
 
 # Verify GPU is available
