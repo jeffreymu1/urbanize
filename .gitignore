@@ -5,3 +5,4 @@ data/PP2/
 *.jpg
 .DS_Store
 .ipynb_checkpoints/
+.idea/
