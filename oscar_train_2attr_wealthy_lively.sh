@@ -124,9 +124,9 @@ export PYTHONUNBUFFERED=1       # Force unbuffered output
       echo "========================================"
 
       EPOCHS_DONE=$(tail -n +2 "${OUT_DIR}/metrics.csv" 2>/dev/null | wc -l | tr -d ' ')
+      if [ "$EPOCHS_DONE" -gt 0 ]; then
         echo "Epochs completed: $EPOCHS_DONE/150"
         PROGRESS_PCT=$((EPOCHS_DONE * 100 / 150))
-        PROGRESS_PCT=$((EPOCHS_DONE * 100 / 200))
         echo "Progress: $PROGRESS_PCT%"
 
         echo ""
@@ -154,11 +154,11 @@ MONITOR_PID=$!
 $EXEC $CONTAINER_PATH python -u src/train_2attr_gan.py \
   --train_csv data/wealthy_lively/wealthy_lively_scores_train.csv \
   --val_csv data/wealthy_lively/wealthy_lively_scores_val.csv \
+  --image_dir data/preprocessed_images \
   --epochs 150 \
-  --epochs 200 \
   --batch_size 128 \
+  --latent_dim 128 \
   --image_size 64 \
-  --image_size 128 \
   --lr 0.0002 \
   --beta1 0.5 \
   --save_every 10 \
