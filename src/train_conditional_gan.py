@@ -166,13 +166,13 @@ def make_conditional_discriminator(image_size, num_attributes=1):
     for i in range(down_steps):
         x = tf.keras.layers.Conv2D(ch, 4, strides=2, padding='same')(x)
         x = tf.keras.layers.LeakyReLU(0.2)(x)
-        x = tf.keras.layers.Dropout(0.3)(x)  # Add dropout like baseline
+        x = tf.keras.layers.Dropout(0.2)(x)  # Reduced for 128x128 balance
         ch = min(ch * 2, 512)
 
     # Final conv to spatial features
     x = tf.keras.layers.Conv2D(512, 4, strides=2, padding='same')(x)
     x = tf.keras.layers.LeakyReLU(0.2)(x)
-    x = tf.keras.layers.Dropout(0.3)(x)  # Add dropout like baseline
+    x = tf.keras.layers.Dropout(0.2)(x)  # Reduced for 128x128 balance
 
     # Flatten image features
     x = tf.keras.layers.Flatten()(x)
