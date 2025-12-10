@@ -105,6 +105,7 @@ def make_dataset(paths, conds, image_size: int, batch_size: int, shuffle: bool, 
 # MODEL comps
 
 class FiLM(tf.keras.layers.Layer):
+    """Feature-wise Linear Modulation for multi-attribute conditioning."""
     def __init__(self, channels: int, name=None):
         super().__init__(name=name)
         self.channels = channels
@@ -113,8 +114,9 @@ class FiLM(tf.keras.layers.Layer):
     def call(self, x, c):
         gb = self.dense(c)
         gamma, beta = tf.split(gb, 2, axis=-1)
-        gamma = 1.0 + 0.1 * tf.tanh(gamma)
-        beta = 0.1 * tf.tanh(beta)
+        # Stronger modulation for 6 attributes (was ±10%, now ±30%)
+        gamma = 1.0 + 0.3 * tf.tanh(gamma)
+        beta = 0.3 * tf.tanh(beta)
         gamma = gamma[:, None, None, :]
         beta = beta[:, None, None, :]
 
@@ -166,7 +168,7 @@ def build_discriminator(image_size: int, cond_dim: int):
     def down_block(x, channels, name):
         x = tf.keras.layers.Conv2D(channels, 4, strides=2, padding="same", name=name)(x)
         x = tf.keras.layers.LeakyReLU(0.2)(x)
-
+        x = tf.keras.layers.Dropout(0.2)(x)  # Balanced regularization
         return x
     
     
@@ -186,7 +188,8 @@ def build_discriminator(image_size: int, cond_dim: int):
 
     # Projection term
     c_embed = tf.keras.layers.Dense(feat_dim, use_bias=False, name="d_c_embed")(c_in)  # [B,F]
-    proj = tf.reduce_sum(x * c_embed, axis=-1, keepdims=True)  # [B,1]
+    # Use Lambda layer for tf operations on KerasTensors
+    proj = tf.keras.layers.Lambda(lambda inputs: tf.reduce_sum(inputs[0] * inputs[1], axis=-1, keepdims=True))([x, c_embed])
     logit = uncond + proj
 
     # Aux regressor head
@@ -289,23 +292,29 @@ def main():
     manager = tf.train.CheckpointManager(ckpt, str(out_dir/ "ckpt"), max_to_keep=3)
 
     @tf.function
-
     def train_step(real_x, c):
         batch_size = tf.shape(real_x)[0]
         z = tf.random.normal([batch_size, args.latent_dim])
 
-        # throw back
+        # Add attribute noise to prevent overfitting to exact values
+        c_noise = tf.random.normal(tf.shape(c), stddev=0.03)
+        c_noisy = tf.clip_by_value(c + c_noise, 0.0, 1.0)
+
         with tf.GradientTape(persistent=True) as tape:
-            fake_x = G([z, c], training=True)
+            fake_x = G([z, c_noisy], training=True)
 
             real_logits, real_c_hat = D([real_x, c], training=True)
-            fake_logits, fake_c_hat = D([fake_x, c], training=True)
+            fake_logits, fake_c_hat = D([fake_x, c_noisy], training=True)
 
-            d_adv = h_d_loss(real_logits, fake_logits)
+            # Hinge loss with label smoothing for real (0.95 for balance)
+            loss_real = tf.reduce_mean(tf.nn.relu(0.95 - real_logits))
+            loss_fake = tf.reduce_mean(tf.nn.relu(1.0 + fake_logits))
+            d_adv = loss_real + loss_fake
+
             g_adv = g_loss_from_logits(fake_logits)
 
             d_reg = mae(real_c_hat, c)
-            g_reg = mae(fake_c_hat, c)
+            g_reg = mae(fake_c_hat, c_noisy)
 
             d_loss = d_adv + args.lambda_reg * d_reg
             g_loss = g_adv + args.lambda_reg * g_reg
@@ -379,10 +388,28 @@ def main():
             g_reg_m.append(float(g_reg.numpy()))
             global_step += 1
 
+        # Monitor discriminator confidence to detect mode collapse
+        # Sample a batch for evaluation
+        sample_real, sample_c = next(iter(ds))
+        z_sample = tf.random.normal([tf.shape(sample_real)[0], args.latent_dim])
+        fake_sample = G([z_sample, sample_c], training=False)
+
+        real_logits_eval, _ = D([sample_real, sample_c], training=False)
+        fake_logits_eval, _ = D([fake_sample, sample_c], training=False)
+
+        # Convert to probabilities (sigmoid of logits)
+        d_real_prob = float(tf.reduce_mean(tf.sigmoid(real_logits_eval)).numpy())
+        d_fake_prob = float(tf.reduce_mean(tf.sigmoid(fake_logits_eval)).numpy())
+
         print(
             f"[train] epoch={epoch} "
             f"D_adv={np.mean(d_adv_m):.3f} D_reg={np.mean(d_reg_m):.3f} "
-            f"G_adv={np.mean(g_adv_m):.3f} G_reg={np.mean(g_reg_m):.3f}")
+            f"G_adv={np.mean(g_adv_m):.3f} G_reg={np.mean(g_reg_m):.3f} "
+            f"| D(real)={d_real_prob:.3f} D(fake)={d_fake_prob:.3f}")
+
+        # Mode collapse warning
+        if d_real_prob > 0.95 and d_fake_prob < 0.05:
+            print("  ⚠️  WARNING: Possible mode collapse detected!")
 
         if epoch % args.save_every_epochs == 0:
             sample_and_save(epoch)
