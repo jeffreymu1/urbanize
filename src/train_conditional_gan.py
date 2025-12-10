@@ -159,20 +159,20 @@ def make_conditional_discriminator(image_size, num_attributes=1):
     # Image processing path
     x = image_input
 
-    # Downsample
+    # Downsample with dropout for stability (matching baseline)
     down_steps = int(np.log2(image_size) - 2)
     ch = 64
 
     for i in range(down_steps):
-        x = tf.keras.layers.Conv2D(ch, 4, strides=2, padding='same', use_bias=False)(x)
-        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Conv2D(ch, 4, strides=2, padding='same')(x)
         x = tf.keras.layers.LeakyReLU(0.2)(x)
+        x = tf.keras.layers.Dropout(0.3)(x)  # Add dropout like baseline
         ch = min(ch * 2, 512)
 
     # Final conv to spatial features
-    x = tf.keras.layers.Conv2D(512, 4, strides=2, padding='same', use_bias=False)(x)
-    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Conv2D(512, 4, strides=2, padding='same')(x)
     x = tf.keras.layers.LeakyReLU(0.2)(x)
+    x = tf.keras.layers.Dropout(0.3)(x)  # Add dropout like baseline
 
     # Flatten image features
     x = tf.keras.layers.Flatten()(x)
@@ -199,8 +199,9 @@ def make_conditional_discriminator(image_size, num_attributes=1):
 bce = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
 def discriminator_loss(real_output, fake_output):
-    """Standard GAN discriminator loss."""
-    real_loss = bce(tf.ones_like(real_output), real_output)
+    """Discriminator loss with label smoothing for stability."""
+    # Label smoothing: use 0.9 instead of 1.0 for real images
+    real_loss = bce(tf.ones_like(real_output) * 0.9, real_output)
     fake_loss = bce(tf.zeros_like(fake_output), fake_output)
     return real_loss + fake_loss
 
@@ -220,8 +221,8 @@ def train_step(generator, discriminator, g_opt, d_opt,
     noise = tf.random.normal([batch_size, latent_dim])
 
     # Add small noise to attribute scores to prevent overfitting to exact values
-    # This helps reduce mode collapse and improves generalization
-    attribute_noise = tf.random.normal(tf.shape(real_scores), mean=0.0, stddev=0.05)
+    # Reduced from 0.05 to 0.03 for better attribute control
+    attribute_noise = tf.random.normal(tf.shape(real_scores), mean=0.0, stddev=0.03)
     noisy_scores = tf.clip_by_value(real_scores + attribute_noise, 0.0, 1.0)
 
     # Train discriminator
@@ -240,7 +241,7 @@ def train_step(generator, discriminator, g_opt, d_opt,
 
     # Train generator
     noise = tf.random.normal([batch_size, latent_dim])
-    attribute_noise = tf.random.normal(tf.shape(real_scores), mean=0.0, stddev=0.05)
+    attribute_noise = tf.random.normal(tf.shape(real_scores), mean=0.0, stddev=0.03)
     noisy_scores = tf.clip_by_value(real_scores + attribute_noise, 0.0, 1.0)
 
     with tf.GradientTape() as gen_tape:
@@ -320,7 +321,8 @@ def train_conditional_gan(
     metrics_path = out_dir / 'metrics.csv'
     with open(metrics_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['epoch', 'g_loss', 'd_loss', 'time_seconds'])
+        writer.writerow(['epoch', 'g_loss', 'd_loss', 'd_real_prob', 'd_fake_prob',
+                         'd_real_logit', 'd_fake_logit', 'epoch_seconds'])
 
     print("\n" + "=" * 70)
     print("Starting Conditional GAN Training")
@@ -328,6 +330,10 @@ def train_conditional_gan(
 
     total_start_time = time.time()
     num_batches = train_size // batch_size
+
+    # Initialize for final summary
+    avg_g_loss = 0.0
+    avg_d_loss = 0.0
 
     for epoch in range(epochs):
         epoch_start = time.time()
@@ -371,6 +377,28 @@ def train_conditional_gan(
         epoch_time = time.time() - epoch_start
         total_elapsed = time.time() - total_start_time
 
+        # Compute discriminator confidence on validation set (like baseline)
+        val_batch_iter = iter(val_ds)
+        try:
+            val_images, val_scores = next(val_batch_iter)
+            val_scores = tf.reshape(val_scores, [-1, 1])
+
+            # Generate fake images for evaluation
+            val_noise = tf.random.normal([tf.shape(val_images)[0], latent_dim])
+            val_fake_images = generator([val_noise, val_scores], training=False)
+
+            # Get discriminator outputs
+            d_real_logits = discriminator([val_images, val_scores], training=False)
+            d_fake_logits = discriminator([val_fake_images, val_scores], training=False)
+
+            # Convert to probabilities
+            d_real_prob = float(tf.reduce_mean(tf.sigmoid(d_real_logits)).numpy())
+            d_fake_prob = float(tf.reduce_mean(tf.sigmoid(d_fake_logits)).numpy())
+            d_real_logit = float(tf.reduce_mean(d_real_logits).numpy())
+            d_fake_logit = float(tf.reduce_mean(d_fake_logits).numpy())
+        except StopIteration:
+            d_real_prob = d_fake_prob = d_real_logit = d_fake_logit = 0.0
+
         # Calculate ETA for remaining epochs
         avg_epoch_time = total_elapsed / (epoch + 1)
         remaining_epochs = epochs - (epoch + 1)
@@ -379,6 +407,7 @@ def train_conditional_gan(
         print(f"\n{'='*70}")
         print(f"Epoch {epoch+1}/{epochs} Complete")
         print(f"  G Loss: {avg_g_loss:.4f} | D Loss: {avg_d_loss:.4f}")
+        print(f"  D(real): {d_real_prob:.3f} | D(fake): {d_fake_prob:.3f}")
         print(f"  Epoch Time: {epoch_time:.1f}s ({epoch_time/60:.1f}m)")
         print(f"  Total Elapsed: {total_elapsed/60:.1f}m ({total_elapsed/3600:.2f}h)")
         if remaining_epochs > 0:
@@ -388,7 +417,8 @@ def train_conditional_gan(
         # Save metrics
         with open(metrics_path, 'a', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([epoch + 1, avg_g_loss, avg_d_loss, epoch_time])
+            writer.writerow([epoch + 1, avg_g_loss, avg_d_loss,
+                           d_real_prob, d_fake_prob, d_real_logit, d_fake_logit, epoch_time])
 
         # Generate preview
         if (epoch + 1) % preview_every == 0 or epoch == 0:

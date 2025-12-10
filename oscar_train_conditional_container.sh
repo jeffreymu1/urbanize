@@ -80,7 +80,7 @@ echo "  Training images: 89,013"
 echo "  Validation images: 9,901"
 echo "  Epochs: 100"
 echo "  Batch size: 128"
-echo "  Image size: 64x64"
+echo "  Image size: 128x128"
 echo "  Output directory: ${OUT_DIR}"
 echo ""
 
@@ -127,8 +127,8 @@ $EXEC $CONTAINER_PATH python -u src/train_conditional_gan.py \
   --attribute_name wealthy_score \
   --epochs 100 \
   --batch_size 128 \
-  --latent_dim 256 \
-  --image_size 64 \
+  --latent_dim 128 \
+  --image_size 128 \
   --lr 0.0002 \
   --beta1 0.5 \
   --save_every 10 \
