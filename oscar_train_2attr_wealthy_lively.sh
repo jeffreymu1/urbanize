@@ -66,6 +66,32 @@ OUT_DIR="results/2attr_wealthy_lively_${TIMESTAMP}"
 mkdir -p logs
 mkdir -p "${OUT_DIR}"
 
+# Check if required files exist
+echo "Checking required files..."
+if [ ! -f "data/wealthy_lively/wealthy_lively_scores_train.csv" ]; then
+    echo "❌ ERROR: data/wealthy_lively/wealthy_lively_scores_train.csv not found"
+    echo ""
+    echo "You need to upload the wealthy_lively dataset to OSCAR:"
+    echo "  scp -r data/wealthy_lively \$USER@ssh.ccv.brown.edu:~/urbanize/data/"
+    echo ""
+    echo "Or create it on OSCAR:"
+    echo "  python src/create_wealthy_lively_dataset.py"
+    exit 1
+fi
+
+if [ ! -f "src/train_2attr_gan.py" ]; then
+    echo "❌ ERROR: src/train_2attr_gan.py not found"
+    exit 1
+fi
+
+if [ ! -d "data/preprocessed_images" ]; then
+    echo "❌ ERROR: data/preprocessed_images/ not found"
+    exit 1
+fi
+
+echo "✅ All required files found"
+echo ""
+
 echo "Configuration:"
 echo "  Attributes: wealthy_score + lively_score"
 echo "  Training images: 73,988"
