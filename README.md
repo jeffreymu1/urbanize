@@ -1,54 +1,95 @@
-# Urbanize - Multi-Attribute Urban Scene GAN
+# Urbanize - Conditional Urban Scene GAN
 
-Generate urban street scenes with independent control over **6 attributes**:
-- **Wealthy** (poor → wealthy)
-- **Depressing** (uplifting → depressing)  
-- **Safety** (unsafe → safe)
-- **Lively** (quiet → lively)
-- **Boring** (interesting → boring)
-- **Beautiful** (ugly → beautiful)
+Generate urban street scenes with controllable **wealthy** attribute.
 
-## Quick Start
+## Current Model: 128x128 Wealthy Attribute GAN
 
-### Local Testing (1 epoch)
+**Recent Updates (Dec 9, 2024):**
+- ✅ Upgraded resolution: 64x64 → 128x128 (4x more pixels)
+- ✅ Improved architecture: Added dropout, label smoothing
+- ✅ Better monitoring: Added discriminator confidence metrics
+- ✅ Fixed mode collapse issues from original model
+
+## Quick Start on OSCAR
+
+### 1. Submit Training Job
 ```bash
-./test_multi_attribute_local.sh
+cd ~/urbanize  # or your path
+sbatch oscar_train_conditional_container.sh
 ```
 
-### Training on OSCAR (100 epochs, ~2 hours)
+### 2. Monitor Training
 ```bash
-# Upload data and scripts
-scp data/all_attribute_scores*.csv YOUR_USER@ssh.ccv.brown.edu:~/urbanize/data/
-scp src/train_multi_attribute_gan.py YOUR_USER@ssh.ccv.brown.edu:~/urbanize/src/
-scp oscar_train_multi_attribute.sh YOUR_USER@ssh.ccv.brown.edu:~/urbanize/
+# Easy way (no permissions needed)
+watch -n 10 bash check_status.sh
 
-# Submit job
-ssh YOUR_USER@ssh.ccv.brown.edu
-cd ~/urbanize
-sbatch oscar_train_multi_attribute.sh
+# Or view live log
+tail -f results/conditional_wealthy_*/training_log_*.txt
+
+# Check job status
+squeue -u $USER
 ```
 
-### Monitor Training
+### 3. Generate Images (After Training)
 ```bash
-# On OSCAR terminal:
-./check_training.sh
+# Generate grid showing wealth 0.0 → 1.0
+python src/generate_samples.py \
+    --checkpoint results/conditional_wealthy_*/checkpoints/ckpt-10 \
+    --mode grid
 
-# From local machine:
-./monitor_oscar_training.sh YOUR_USER
+# Generate everything (grid, samples, interpolation)
+python src/generate_samples.py \
+    --checkpoint results/conditional_wealthy_*/checkpoints/ckpt-10 \
+    --mode all
 ```
 
-## Architecture
+## Training Details
 
-**Model:** Conditional DCGAN
-- **Generator Input:** 128-d noise + 6-d attributes = 134-d total
-- **Discriminator Input:** 64×64×3 image + 6-d attributes
-- **Output:** 64×64×3 RGB images
+**Architecture:** Conditional DCGAN
+- Input: 128-d latent noise + 1-d wealth score
+- Output: 128×128×3 RGB images
+- Generator: 4×4 start → progressive upsampling → 128×128
+- Discriminator: Dropout(0.3) for stability
 
-**Dataset:** 110K urban street view images with computed attribute scores from 1.2M pairwise comparisons
+**Training:**
+- Dataset: 89K training images, 10K validation
+- Epochs: 100 (~4-5 hours on OSCAR GPU)
+- Batch size: 128
+- Learning rate: 0.0002 (Adam, β₁=0.5)
+
+**Expected Metrics (Healthy Training):**
+- D(real): 0.6-0.8
+- D(fake): 0.1-0.4
+- G loss: 1.5-2.5 (stable)
+- D loss: 0.6-0.8 (stable)
+
+## Generation Script Usage
+
+The `generate_samples.py` script supports 4 modes:
+
+**1. Grid** - Shows wealth progression (0.0 → 1.0)
+```bash
+python src/generate_samples.py --checkpoint PATH --mode grid
+```
+
+**2. Specific** - Generate N samples at specific wealth levels
+```bash
+python src/generate_samples.py --checkpoint PATH --mode specific \
+    --wealth_scores 0.0 0.5 1.0 --num_samples 10
+```
+
+**3. Random** - Generate diverse dataset
+```bash
+python src/generate_samples.py --checkpoint PATH --mode random \
+    --num_random 200
+```
+
+**4. Interpolation** - Smooth transition visualization
+```bash
+python src/generate_samples.py --checkpoint PATH --mode interpolation
+```
 
 ## Key Files
-
-### Training Scripts
 - `src/train_multi_attribute_gan.py` - Multi-attribute GAN training
 - `oscar_train_multi_attribute.sh` - OSCAR GPU training script
 - `test_multi_attribute_local.sh` - Local 1-epoch test
@@ -57,48 +98,39 @@ sbatch oscar_train_multi_attribute.sh
 - `data/all_attribute_scores_*.csv` - Train/val/test splits with 6 attributes
 - `data/preprocessed_images/` - 64×64 preprocessed street view images
 
-### Monitoring
-- `check_training.sh` - Quick training status (on OSCAR)
-- `monitor_oscar_training.sh` - Full monitoring dashboard (local)
 
-### Documentation (in `info/`)
-- `info/MULTI_ATTRIBUTE_PLAN.md` - Implementation roadmap
-- `info/MONITORING_GUIDE.md` - Detailed monitoring instructions
-- `info/OSCAR_QUICK_REF.md` - Quick OSCAR commands
-- `info/OSCAR_QUICK_COMMANDS.txt` - Copy-paste command reference
-- `info/OSCAR_SETUP_GUIDE.md` - OSCAR setup (first-time only)
-- `info/OSCAR_COMPLETE_GUIDE.md` - Complete OSCAR reference
+### Scripts
+- `oscar_train_conditional_container.sh` - OSCAR training job (128x128)
+- `src/train_conditional_gan.py` - Training code
+- `src/generate_samples.py` - Image generation
+- `check_status.sh` - Simple monitoring (no permissions needed)
 
-## Results
+### Data
+- `data/wealthy_scores_train.csv` - Training data (89K images)
+- `data/wealthy_scores_val.csv` - Validation data (10K images)
+- `data/preprocessed_images/` - 300×300 cropped images
 
-After training, results will be in `results/multi_attribute_gan_TIMESTAMP/`:
-- `checkpoints/` - Model weights
-- `preview_epoch_*.png` - Generated samples (6 attributes × 6 values grid)
-- `metrics.csv` - Training loss history
-- `training_log_*.txt` - Full training logs
+## Troubleshooting
 
-## Generate Images
+### Permission Denied on ./script.sh
+Use `bash check_status.sh` instead of `./check_status.sh`
 
-After training completes:
-
-```python
-# Generate with specific attributes
-python src/generate_multi_attribute.py \
-  --checkpoint_dir results/multi_attribute_gan_*/checkpoints/ \
-  --wealthy 0.8 --safety 0.9 --beautiful 0.7
-
-# Interactive demo with sliders
-python src/interactive_multi_attribute_demo.py \
-  --checkpoint_dir results/multi_attribute_gan_*/checkpoints/
+### Job Not Starting
+```bash
+squeue -u $USER  # Check if queued
+squeue -p gpu    # See GPU availability
 ```
 
-## Dependencies
+### Training Looks Bad
+Check discriminator balance:
+- D(real) > 0.95, D(fake) < 0.05 → Mode collapse
+- D(real) < 0.4, D(fake) > 0.6 → Generator dominating
+- Both metrics should be in healthy ranges above
 
+### Out of Memory
+Reduce batch size in `oscar_train_conditional_container.sh`:
 ```bash
-# Install on local machine
-pip install -r requirements.txt
-
-# OSCAR uses pre-built TensorFlow container (no install needed)
+--batch_size 64  # Instead of 128
 ```
 
 ## Project Structure
@@ -106,8 +138,37 @@ pip install -r requirements.txt
 ```
 urbanize/
 ├── src/
-│   ├── train_multi_attribute_gan.py      # Main training script
-│   ├── compute_attribute_scores.py       # Score computation
+│   ├── train_conditional_gan.py      # Main training (128x128)
+│   ├── generate_samples.py           # Image generation
+│   ├── baseline_model.py             # Baseline unconditional GAN
+│   └── preprocess.py                 # Image preprocessing
+├── data/
+│   ├── wealthy_scores_train.csv      # Training scores
+│   ├── wealthy_scores_val.csv        # Validation scores
+│   └── preprocessed_images/          # 300×300 images
+├── results/                           # Training outputs
+├── oscar_train_conditional_container.sh  # OSCAR job script
+├── check_status.sh                    # Simple monitoring
+└── README.md                          # This file
+```
+
+## Dataset
+
+**Source:** Place Pulse 2.0 - Urban perception dataset  
+**Images:** 110K street view images  
+**Annotations:** 1.2M pairwise comparisons  
+**Attributes:** Wealth scores computed via Elo ranking system  
+**Processing:** Center-cropped to 300×300, resized to 128×128 for training
+
+## Citation
+
+If you use this dataset or model:
+```
+Dubey, A., Naik, N., Parikh, D., Raskar, R., & Hidalgo, C. A. (2016).
+Deep Learning the City: Quantifying Urban Perception at a Global Scale.
+ECCV 2016.
+```
+
 │   └── check_multi_attribute_distribution.py  # Data analysis
 ├── data/
 │   ├── all_attribute_scores_train.csv    # Training data
