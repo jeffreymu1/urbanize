@@ -1,0 +1,23 @@
+{
+  "attributes": [
+    "wealthy_score",
+    "lively_score"
+  ],
+  "total_images": 92485,
+  "train_images": 73988,
+  "val_images": 9248,
+  "test_images": 9249,
+  "correlation": 0.22213937024885494,
+  "wealthy_stats": {
+    "min": 0.0,
+    "max": 1.0,
+    "mean": 0.4853559593411823,
+    "std": 0.07810852012561077
+  },
+  "lively_stats": {
+    "min": 0.0,
+    "max": 1.0,
+    "mean": 0.46511004521800575,
+    "std": 0.08229058357441682
+  }
+}
