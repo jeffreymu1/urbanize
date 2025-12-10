@@ -101,10 +101,10 @@ echo ""
       echo "========================================"
       EPOCHS_DONE=$(tail -n +2 "${OUT_DIR}/metrics.csv" 2>/dev/null | wc -l | tr -d ' ')
       if [ "$EPOCHS_DONE" -gt 0 ]; then
-        echo "Epochs completed: $EPOCHS_DONE/100"
+        echo "Epochs completed: $EPOCHS_DONE/200"
         LATEST=$(tail -n 1 "${OUT_DIR}/metrics.csv" 2>/dev/null)
         echo "Latest metrics: $LATEST"
-        PROGRESS_PCT=$((EPOCHS_DONE * 100 / 100))
+        PROGRESS_PCT=$((EPOCHS_DONE * 100 / 200))
         echo "Progress: $PROGRESS_PCT%"
 
         # Show last few lines of log
@@ -125,7 +125,7 @@ $EXEC $CONTAINER_PATH python -u src/train_conditional_gan.py \
   --val_csv data/wealthy_scores_val.csv \
   --image_dir data/preprocessed_images \
   --attribute_name wealthy_score \
-  --epochs 100 \
+  --epochs 200 \
   --batch_size 128 \
   --latent_dim 128 \
   --image_size 128 \

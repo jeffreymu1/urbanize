@@ -57,11 +57,11 @@ fi
 
 # Count epochs
 EPOCHS_DONE=$(tail -n +2 "$METRICS_FILE" 2>/dev/null | wc -l | tr -d ' ')
-echo "✅ Epochs completed: $EPOCHS_DONE / 100"
+echo "✅ Epochs completed: $EPOCHS_DONE / 200"
 
 # Calculate progress percentage
 if [ "$EPOCHS_DONE" -gt 0 ]; then
-    PROGRESS=$((EPOCHS_DONE * 100 / 100))
+    PROGRESS=$((EPOCHS_DONE * 100 / 200))
     echo "📊 Progress: $PROGRESS%"
 fi
 echo ""

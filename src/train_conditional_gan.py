@@ -166,13 +166,13 @@ def make_conditional_discriminator(image_size, num_attributes=1):
     for i in range(down_steps):
         x = tf.keras.layers.Conv2D(ch, 4, strides=2, padding='same')(x)
         x = tf.keras.layers.LeakyReLU(0.2)(x)
-        x = tf.keras.layers.Dropout(0.15)(x)  # Further reduced for 128x128
+        # No dropout - discriminator too strong at 128x128
         ch = min(ch * 2, 512)
 
     # Final conv to spatial features
     x = tf.keras.layers.Conv2D(512, 4, strides=2, padding='same')(x)
     x = tf.keras.layers.LeakyReLU(0.2)(x)
-    x = tf.keras.layers.Dropout(0.15)(x)  # Further reduced for 128x128
+    # No dropout - discriminator too strong at 128x128
 
     # Flatten image features
     x = tf.keras.layers.Flatten()(x)
@@ -199,10 +199,11 @@ def make_conditional_discriminator(image_size, num_attributes=1):
 bce = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
 def discriminator_loss(real_output, fake_output):
-    """Discriminator loss with label smoothing for stability."""
-    # Label smoothing: use 0.9 instead of 1.0 for real images
-    real_loss = bce(tf.ones_like(real_output) * 0.9, real_output)
-    fake_loss = bce(tf.zeros_like(fake_output), fake_output)
+    """Discriminator loss with two-sided label smoothing for 128x128 stability."""
+    # Two-sided label smoothing for 128x128: real=0.85 (was 0.9), fake=0.1 (was 0.0)
+    # This weakens discriminator to give generator a better chance
+    real_loss = bce(tf.ones_like(real_output) * 0.85, real_output)
+    fake_loss = bce(tf.ones_like(fake_output) * 0.1, fake_output)
     return real_loss + fake_loss
 
 def generator_loss(fake_output):
@@ -514,7 +515,8 @@ def main():
 
     # Optimizers
     g_opt = tf.keras.optimizers.Adam(learning_rate=args.lr, beta_1=args.beta1)
-    d_opt = tf.keras.optimizers.Adam(learning_rate=args.lr, beta_1=args.beta1)
+    # Discriminator learns slower for 128x128 to prevent overpowering generator
+    d_opt = tf.keras.optimizers.Adam(learning_rate=args.lr * 0.5, beta_1=args.beta1)
 
     # Train
     train_conditional_gan(
