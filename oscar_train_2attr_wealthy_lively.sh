@@ -109,6 +109,10 @@ echo "Note: 64x64 chosen for stability - can upscale to 128x128 after success"
 echo "=========================================="
 echo ""
 
+# Set environment variables for better output
+export TF_CPP_MIN_LOG_LEVEL=0  # Show all TensorFlow logs
+export PYTHONUNBUFFERED=1       # Force unbuffered output
+
 # Background progress monitor
 (
   sleep 300

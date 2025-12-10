@@ -17,6 +17,13 @@ Usage:
 
 import os
 import sys
+
+# Force unbuffered output
+sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
+
+# Set TensorFlow logging before import
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'  # Show all logs
+
 # Add parent directory to path to import from train_conditional_gan
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -338,14 +345,47 @@ def main():
     print(f"Output: {out_dir}")
     print()
 
+    # Validate input files exist
+    print("Validating input files...")
+    train_csv_path = Path(args.train_csv)
+    val_csv_path = Path(args.val_csv)
+    img_dir_path = Path(args.image_dir)
+
+    if not train_csv_path.exists():
+        raise FileNotFoundError(f"Training CSV not found: {train_csv_path}")
+    if not val_csv_path.exists():
+        raise FileNotFoundError(f"Validation CSV not found: {val_csv_path}")
+    if not img_dir_path.exists():
+        raise FileNotFoundError(f"Image directory not found: {img_dir_path}")
+
+    print(f"  ✅ Train CSV found: {train_csv_path}")
+    print(f"  ✅ Val CSV found: {val_csv_path}")
+    print(f"  ✅ Image dir found: {img_dir_path}")
+    print()
+
     # Load datasets
     print("Loading datasets...")
-    train_ds, train_size = make_2attr_dataset(
-        args.train_csv, args.image_dir, args.image_size, args.batch_size, shuffle=True
-    )
-    val_ds, val_size = make_2attr_dataset(
-        args.val_csv, args.image_dir, args.image_size, args.batch_size, shuffle=False
-    )
+    print(f"  Train CSV: {args.train_csv}")
+    print(f"  Val CSV: {args.val_csv}")
+    print(f"  Image dir: {args.image_dir}")
+
+    try:
+        train_ds, train_size = make_2attr_dataset(
+            args.train_csv, args.image_dir, args.image_size, args.batch_size, shuffle=True
+        )
+        print(f"  ✅ Train dataset loaded: {train_size:,} images")
+    except Exception as e:
+        print(f"  ❌ ERROR loading training dataset: {e}")
+        raise
+
+    try:
+        val_ds, val_size = make_2attr_dataset(
+            args.val_csv, args.image_dir, args.image_size, args.batch_size, shuffle=False
+        )
+        print(f"  ✅ Val dataset loaded: {val_size:,} images")
+    except Exception as e:
+        print(f"  ❌ ERROR loading validation dataset: {e}")
+        raise
 
     # Build models (num_attributes=2 for wealthy + lively)
     print("\nBuilding models...")
@@ -369,5 +409,28 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    import sys
+    import traceback
+
+    print("="*70)
+    print("Starting 2-Attribute GAN Training Script")
+    print("="*70)
+    print(f"Python version: {sys.version}")
+    print(f"Working directory: {os.getcwd()}")
+    print()
+
+    try:
+        main()
+    except Exception as e:
+        print("\n" + "="*70)
+        print("❌ FATAL ERROR IN TRAINING SCRIPT")
+        print("="*70)
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        print()
+        print("Full traceback:")
+        print("-"*70)
+        traceback.print_exc()
+        print("="*70)
+        sys.exit(1)
 
