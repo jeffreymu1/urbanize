@@ -20,8 +20,8 @@ else
 fi
 echo ""
 
-# Find latest training directory
-LATEST=$(ls -td ~/urbanize/results/conditional_wealthy_* 2>/dev/null | head -1)
+# Find latest training directory (check both single-attribute and multi-attribute)
+LATEST=$(ls -td ~/urbanize/results/conditional_wealthy_* ~/urbanize/results/multi_attribute_gan_* 2>/dev/null | head -1)
 
 if [ -z "$LATEST" ]; then
     echo "❌ No training results found yet"
