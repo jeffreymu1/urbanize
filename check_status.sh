@@ -72,7 +72,7 @@ if [ "$EPOCHS_DONE" -gt 0 ]; then
     echo "-----------------------------------------------------"
     echo "Epoch | G Loss | D Loss | D(real) | D(fake) | Time(s)"
     echo "-----------------------------------------------------"
-    tail -5 "$METRICS_FILE" | while IFS=',' read -r epoch g_loss d_loss d_real d_fake d_real_logit d_fake_logit time; do
+    tail -n +2 "$METRICS_FILE" | tail -5 | while IFS=',' read -r epoch g_loss d_loss d_real d_fake d_real_logit d_fake_logit time; do
         # Round time to integer
         time_int=$(echo "$time" | cut -d'.' -f1)
         printf "%5s | %6.3f | %6.3f | %7.3f | %7.3f | %7s\n" "$epoch" "$g_loss" "$d_loss" "$d_real" "$d_fake" "$time_int"
@@ -101,21 +101,21 @@ if [ "$EPOCHS_DONE" -gt 0 ]; then
     # Simple health check (works without bc)
     echo "🏥 Health Check:"
 
-    # D(real) check - convert to integer by removing decimal
-    D_REAL_INT=$(echo "$D_REAL" | tr -d '.' | cut -c1-2)
-    if [ "$D_REAL_INT" -gt 95 ]; then
+    # D(real) check - convert to percentage (0.622 -> 62)
+    D_REAL_PCT=$(echo "$D_REAL" | awk '{printf "%.0f", $1*100}')
+    if [ "$D_REAL_PCT" -gt 95 ]; then
         echo "  ⚠️  D(real) too high ($D_REAL) - discriminator might be too strong"
-    elif [ "$D_REAL_INT" -lt 40 ]; then
+    elif [ "$D_REAL_PCT" -lt 40 ]; then
         echo "  ⚠️  D(real) too low ($D_REAL) - generator might be dominating"
     else
         echo "  ✅ D(real) looks good ($D_REAL)"
     fi
 
-    # D(fake) check
-    D_FAKE_INT=$(echo "$D_FAKE" | tr -d '.' | cut -c1-2)
-    if [ "$D_FAKE_INT" -lt 5 ]; then
+    # D(fake) check - convert to percentage (0.222 -> 22)
+    D_FAKE_PCT=$(echo "$D_FAKE" | awk '{printf "%.0f", $1*100}')
+    if [ "$D_FAKE_PCT" -lt 5 ]; then
         echo "  ⚠️  D(fake) too low ($D_FAKE) - possible mode collapse"
-    elif [ "$D_FAKE_INT" -gt 60 ]; then
+    elif [ "$D_FAKE_PCT" -gt 60 ]; then
         echo "  ⚠️  D(fake) too high ($D_FAKE) - discriminator might be too weak"
     else
         echo "  ✅ D(fake) looks good ($D_FAKE)"
