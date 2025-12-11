@@ -1,3 +1,5 @@
+![Project banner](report/Urbanize.jpg)
+
 #  Urbanize: Conditioned Urban Scene Synthesis
 
 Perceptions of urban environments, such as how safe, wealthy, or lively a place appearsm, play an
