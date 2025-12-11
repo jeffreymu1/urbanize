@@ -39,7 +39,6 @@ from datetime import datetime
 
 # Import from existing single-attribute script
 from train_conditional_gan import (
-    load_image_with_score,
     make_conditional_generator,
     make_conditional_discriminator,
     discriminator_loss,
@@ -261,6 +260,7 @@ def train_2attr_gan(train_ds, val_ds, train_size, val_size,
             d_real_logit = float(tf.reduce_mean(d_real_logits).numpy())
             d_fake_logit = float(tf.reduce_mean(d_fake_logits).numpy())
         except StopIteration:
+            val_images = None  # Ensure val_images is defined
             d_real_prob = d_fake_prob = d_real_logit = d_fake_logit = 0.0
 
         # ETA
@@ -293,7 +293,6 @@ def train_2attr_gan(train_ds, val_ds, train_size, val_size,
 
         # FID computation
         if (epoch + 1) % fid_every == 0:
-            from fid import calculate_fid
             # Sample fake images
             num_fake_samples = fid_num_samples // batch_size
             fake_images_ds = (
@@ -306,12 +305,14 @@ def train_2attr_gan(train_ds, val_ds, train_size, val_size,
             )
 
             # Calculate FID
-            fid_value = calculate_fid(
-                real_images=val_images, fake_images=fake_images_ds,
-                stats_path=fid_stats_path, batch_size=fid_batch_size
-            )
-
-            print(f"  FID at epoch {epoch+1}: {fid_value:.4f}")
+            if val_images is not None:  # Ensure val_images is available
+                fid_value = calculate_fid(
+                    real_images=val_images, fake_images=fake_images_ds,
+                    stats_path=fid_stats_path, batch_size=fid_batch_size
+                )
+                print(f"  FID at epoch {epoch+1}: {fid_value:.4f}")
+            else:
+                print("  Skipped FID computation: validation images not available")
 
     # Final save
     final_ckpt = ckpt_manager.save()
@@ -324,6 +325,57 @@ def train_2attr_gan(train_ds, val_ds, train_size, val_size,
     print(f"  Total Time: {total_time/60:.1f}m ({total_time/3600:.2f}h)")
     print(f"  Final Checkpoint: {final_ckpt}")
     print(f"{'='*70}\n")
+
+
+# ==================== FID CALCULATION ====================
+
+from scipy.linalg import sqrtm
+from tensorflow.keras.applications.inception_v3 import InceptionV3
+from tensorflow.keras.applications.inception_v3 import preprocess_input
+
+def calculate_fid(real_images, fake_images, stats_path, batch_size=32):
+    """
+    Calculate the Frechet Inception Distance (FID) between real and fake images.
+
+    Args:
+        real_images: Dataset of real images.
+        fake_images: Dataset of fake images.
+        stats_path: Path to precomputed real image statistics (mean, covariance).
+        batch_size: Batch size for processing images.
+
+    Returns:
+        FID score.
+    """
+    # Load InceptionV3 model
+    model = InceptionV3(include_top=False, pooling='avg', input_shape=(299, 299, 3))
+
+    def get_activations(dataset):
+        activations = []
+        for batch in dataset:
+            batch = tf.image.resize(batch, (299, 299))
+            batch = preprocess_input(batch.numpy())
+            act = model.predict(batch, batch_size=batch_size)
+            activations.append(act)
+        return np.vstack(activations)
+
+    # Load real image statistics
+    with np.load(stats_path) as data:
+        mu_real, sigma_real = data['mu'], data['sigma']
+
+    # Compute activations for fake images
+    fake_activations = get_activations(fake_images)
+    mu_fake = np.mean(fake_activations, axis=0)
+    sigma_fake = np.cov(fake_activations, rowvar=False)
+
+    # Calculate FID
+    diff = mu_real - mu_fake
+    covmean = sqrtm(sigma_real @ sigma_fake)
+    # Ensure covmean is complex before accessing the real attribute
+    if np.iscomplexobj(covmean):
+        covmean = covmean.real
+
+    fid = np.sum(diff**2) + np.trace(sigma_real + sigma_fake - 2 * covmean)
+    return fid
 
 
 # ==================== MAIN ====================
