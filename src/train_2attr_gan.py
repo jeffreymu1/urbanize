@@ -188,7 +188,8 @@ def generate_2attr_preview(generator, latent_dim, epoch, out_dir):
 def train_2attr_gan(train_ds, val_ds, train_size, val_size,
                     generator, discriminator, g_opt, d_opt,
                     latent_dim, batch_size, epochs, out_dir,
-                    save_every=10, preview_every=10):
+                    save_every=10, preview_every=10, fid_every=5,
+                    fid_num_samples=512, fid_batch_size=32, fid_stats_path='results/fid_real_stats_512.npz'):
     """Main training loop for 2-attribute GAN."""
 
     checkpoint_dir = out_dir / 'checkpoints'
@@ -290,6 +291,28 @@ def train_2attr_gan(train_ds, val_ds, train_size, val_size,
             ckpt_path = ckpt_manager.save()
             print(f"  Saved checkpoint: {ckpt_path}")
 
+        # FID computation
+        if (epoch + 1) % fid_every == 0:
+            from fid import calculate_fid
+            # Sample fake images
+            num_fake_samples = fid_num_samples // batch_size
+            fake_images_ds = (
+                tf.data.Dataset
+                .from_tensor_slices(tf.random.normal([num_fake_samples, latent_dim]))
+                .map(lambda noise: generator([noise, val_attrs], training=False),
+                     num_parallel_calls=tf.data.AUTOTUNE)
+                .unbatch()
+                .batch(fid_batch_size)
+            )
+
+            # Calculate FID
+            fid_value = calculate_fid(
+                real_images=val_images, fake_images=fake_images_ds,
+                stats_path=fid_stats_path, batch_size=fid_batch_size
+            )
+
+            print(f"  FID at epoch {epoch+1}: {fid_value:.4f}")
+
     # Final save
     final_ckpt = ckpt_manager.save()
     total_time = time.time() - total_start
@@ -326,6 +349,12 @@ def main():
     parser.add_argument('--beta1', type=float, default=0.5)
     parser.add_argument('--save_every', type=int, default=10)
     parser.add_argument('--preview_every', type=int, default=10)
+
+    # FID Tracking
+    parser.add_argument('--fid_every', type=int, default=5, help='Frequency of FID computation (epochs)')
+    parser.add_argument('--fid_num_samples', type=int, default=512, help='Number of samples for FID computation')
+    parser.add_argument('--fid_batch_size', type=int, default=32, help='Batch size for FID computation')
+    parser.add_argument('--fid_stats_path', type=str, default='results/fid_real_stats_512.npz', help='Path to FID stats file')
 
     # Output
     parser.add_argument('--out_dir', type=str,
@@ -404,7 +433,8 @@ def main():
         train_ds, val_ds, train_size, val_size,
         generator, discriminator, g_opt, d_opt,
         args.latent_dim, args.batch_size, args.epochs,
-        out_dir, args.save_every, args.preview_every
+        out_dir, args.save_every, args.preview_every, args.fid_every,
+        args.fid_num_samples, args.fid_batch_size, args.fid_stats_path
     )
 
 

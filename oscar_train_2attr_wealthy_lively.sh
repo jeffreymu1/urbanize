@@ -102,6 +102,9 @@ echo "  Image size: 64x64 (recommended for 2-attr stability)"
 echo "  Output directory: ${OUT_DIR}"
 echo ""
 
+# Ensure FID stats are saved during training
+FID_STATS_PATH="results/fid_real_stats_512.npz"
+
 # Run training
 echo "Starting 2-attribute GAN training (150 epochs at 64x64)..."
 echo "Expected duration: ~4-5 hours"
@@ -155,10 +158,10 @@ $EXEC $CONTAINER_PATH python -u src/train_2attr_gan.py \
   --train_csv data/wealthy_lively/wealthy_lively_scores_train.csv \
   --val_csv data/wealthy_lively/wealthy_lively_scores_val.csv \
   --image_dir data/preprocessed_images \
-  --epochs 150 \
-  --batch_size 128 \
-  --latent_dim 128 \
   --image_size 64 \
+  --latent_dim 128 \
+  --batch_size 128 \
+  --epochs 200 \
   --lr 0.0002 \
   --beta1 0.5 \
   --save_every 10 \
@@ -166,9 +169,9 @@ $EXEC $CONTAINER_PATH python -u src/train_2attr_gan.py \
   --fid_every 5 \
   --fid_num_samples 512 \
   --fid_batch_size 32 \
-  --fid_stats_path "results/fid_real_stats_512.npz" \
-  --out_dir "${OUT_DIR}" \
-  2>&1 | tee "${OUT_DIR}/training_log_${TIMESTAMP}.txt"
+  --fid_stats_path "$FID_STATS_PATH" \
+  --out_dir "$OUT_DIR" \
+  2>&1 | tee "$OUT_DIR/training_log_${TIMESTAMP}.txt"
 
 EXIT_CODE=$?
 
