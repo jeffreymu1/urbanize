@@ -293,26 +293,28 @@ def train_2attr_gan(train_ds, val_ds, train_size, val_size,
 
         # FID computation
         if (epoch + 1) % fid_every == 0:
-            # Sample fake images
-            num_fake_samples = fid_num_samples // batch_size
-            fake_images_ds = (
-                tf.data.Dataset
-                .from_tensor_slices(tf.random.normal([num_fake_samples, latent_dim]))
-                .map(lambda noise: generator([noise, val_attrs], training=False),
-                     num_parallel_calls=tf.data.AUTOTUNE)
-                .unbatch()
-                .batch(fid_batch_size)
-            )
-
-            # Calculate FID
-            if val_images is not None:  # Ensure val_images is available
+            if val_images is not None and 'val_attrs' in locals() and val_attrs is not None:
+                num_fake_samples = fid_num_samples
+                latent_ds = tf.data.Dataset.from_tensor_slices(tf.random.normal([num_fake_samples, latent_dim]))
+                attr_array = val_attrs.numpy()
+                if attr_array.shape[0] < num_fake_samples:
+                    repeats = int(np.ceil(num_fake_samples / attr_array.shape[0]))
+                    attr_array = np.tile(attr_array, (repeats, 1))[:num_fake_samples]
+                attr_ds = tf.data.Dataset.from_tensor_slices(attr_array)
+                fake_input_ds = tf.data.Dataset.zip((latent_ds, attr_ds)).batch(fid_batch_size)
+                def gen_map(inputs):
+                    noise, attrs = inputs
+                    noise = tf.expand_dims(noise, axis=0) if len(noise.shape) == 1 else noise
+                    attrs = tf.expand_dims(attrs, axis=0) if len(attrs.shape) == 1 else attrs
+                    return generator([noise, attrs], training=False)[0]
+                fake_images_ds = fake_input_ds.map(gen_map, num_parallel_calls=tf.data.AUTOTUNE)
                 fid_value = calculate_fid(
                     real_images=val_images, fake_images=fake_images_ds,
                     stats_path=fid_stats_path, batch_size=fid_batch_size
                 )
                 print(f"  FID at epoch {epoch+1}: {fid_value:.4f}")
             else:
-                print("  Skipped FID computation: validation images not available")
+                print("  Skipped FID computation: validation images/attributes not available")
 
     # Final save
     final_ckpt = ckpt_manager.save()
