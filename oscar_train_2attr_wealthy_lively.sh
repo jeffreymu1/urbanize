@@ -163,6 +163,10 @@ $EXEC $CONTAINER_PATH python -u src/train_2attr_gan.py \
   --beta1 0.5 \
   --save_every 10 \
   --preview_every 10 \
+  --fid_every 5 \
+  --fid_num_samples 512 \
+  --fid_batch_size 32 \
+  --fid_stats_path "results/fid_real_stats_512.npz" \
   --out_dir "${OUT_DIR}" \
   2>&1 | tee "${OUT_DIR}/training_log_${TIMESTAMP}.txt"
 
@@ -199,4 +203,3 @@ echo "End time: $(date)"
 echo "=========================================="
 
 exit $EXIT_CODE
-

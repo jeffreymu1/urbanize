@@ -25,6 +25,7 @@ import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from train_conditional_gan import make_conditional_generator
+from baseline_model import setup_fid, compute_fid
 import sys
 
 def load_generator(checkpoint_dir, image_size, latent_dim, checkpoint_name=None):
@@ -139,6 +140,9 @@ def main():
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--out_path', type=str, default='results/generated_2attr_grid.png')
     parser.add_argument('--out_dir', type=str, default='results/generated_2attr_samples')
+    parser.add_argument('--fid_stats_path', type=str, default=None, help='Path to FID stats file')
+    parser.add_argument('--fid_num_samples', type=int, default=512, help='Number of samples for FID computation')
+    parser.add_argument('--fid_batch_size', type=int, default=32, help='Batch size for FID computation')
     args = parser.parse_args()
     print("="*70)
     print("2-Attribute GAN Image Generation")
@@ -163,6 +167,13 @@ def main():
         print(f"\nGenerating {args.num_samples} samples at wealthy={args.wealthy}, lively={args.lively}")
         images = generate_samples(gen, args.latent_dim, args.wealthy, args.lively, args.num_samples, seed=args.seed)
         save_individual(images, args.out_dir, args.wealthy, args.lively)
+    if args.fid_stats_path:
+        print("\nSetting up FID computation...")
+        fid_inception, fid_real_mu, fid_real_sigma = setup_fid(None, Path(args.fid_stats_path).parent, args.fid_num_samples)
+        print("✅ FID setup complete!")
+        print("\nComputing FID...")
+        fid_value = compute_fid(gen, args.latent_dim, fid_inception, fid_real_mu, fid_real_sigma, args.fid_num_samples, args.fid_batch_size)
+        print(f"FID: {fid_value}")
     print("\n" + "="*70)
     print("✅ Generation complete!")
     print("="*70)
