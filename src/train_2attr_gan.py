@@ -216,6 +216,7 @@ def train_2attr_gan(train_ds, val_ds, train_size, val_size,
         epoch_start = time.time()
         g_losses = []
         d_losses = []
+        val_attrs = None  # Ensure val_attrs is always defined
 
         print(f"\n{'='*70}")
         print(f"Epoch {epoch+1}/{epochs}")
@@ -302,8 +303,7 @@ def train_2attr_gan(train_ds, val_ds, train_size, val_size,
                     attr_array = np.tile(attr_array, (repeats, 1))[:num_fake_samples]
                 attr_ds = tf.data.Dataset.from_tensor_slices(attr_array)
                 fake_input_ds = tf.data.Dataset.zip((latent_ds, attr_ds)).batch(fid_batch_size)
-                def gen_map(inputs):
-                    noise, attrs = inputs
+                def gen_map(noise, attrs):
                     noise = tf.expand_dims(noise, axis=0) if len(noise.shape) == 1 else noise
                     attrs = tf.expand_dims(attrs, axis=0) if len(attrs.shape) == 1 else attrs
                     return generator([noise, attrs], training=False)[0]
