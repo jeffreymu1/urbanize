@@ -5,8 +5,6 @@ data/PP2/final_photo_dataset/
 data/PP2/final_data.csv
 data/PP2/votes.csv
 
-
-*.jpg
 .DS_Store
 .ipynb_checkpoints/
 .idea/
