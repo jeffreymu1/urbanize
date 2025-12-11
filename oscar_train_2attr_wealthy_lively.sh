@@ -103,7 +103,7 @@ echo "  Output directory: ${OUT_DIR}"
 echo ""
 
 # Ensure FID stats are saved during training
-FID_STATS_PATH="results/fid_real_stats_512.npz"
+FID_STATS_PATH="results/fid_real_stats_256.npz"
 
 # Run training
 echo "Starting 2-attribute GAN training (150 epochs at 64x64)..."
